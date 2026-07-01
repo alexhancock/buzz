@@ -57,6 +57,7 @@ import {
   AgentProviderField,
 } from "./personaProviderModelFields";
 import { usePersonaModelDiscovery } from "./usePersonaModelDiscovery";
+import { useGlobalAgentConfig } from "@/features/agents/useGlobalAgentConfig";
 
 export function CreateAgentDialog({
   open,
@@ -72,6 +73,7 @@ export function CreateAgentDialog({
   const allProvidersQuery = useAcpRuntimesQuery({ enabled: open });
   const backendProvidersQuery = useBackendProvidersQuery({ enabled: open });
   const { lastRuntimeId, setLastRuntime } = useLastRuntime();
+  const { globalConfig } = useGlobalAgentConfig();
   const [acpCommand, setAcpCommand] = React.useState("buzz-acp");
   const [agentCommand, setAgentCommand] = React.useState("buzz-agent");
   const [agentArgs, setAgentArgs] = React.useState("acp");
@@ -829,6 +831,8 @@ export function CreateAgentDialog({
               disabled={createMutation.isPending}
               fileSatisfiedKeys={fileSatisfiedEnvKeys}
               helperText="Injected at spawn. Overrides the template's env vars on collision."
+              inheritedFrom={globalConfig.env_vars}
+              inheritedLabel="global defaults"
               onChange={setEnvVars}
               requiredKeys={requiredEnvKeys}
               value={envVars}

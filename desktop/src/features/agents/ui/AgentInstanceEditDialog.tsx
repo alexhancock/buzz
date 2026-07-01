@@ -61,6 +61,7 @@ import {
   MODEL_DISCOVERY_LOADING_VALUE,
   usePersonaModelDiscovery,
 } from "./usePersonaModelDiscovery";
+import { useGlobalAgentConfig } from "@/features/agents/useGlobalAgentConfig";
 
 const ADVANCED_FIELDS_MOTION_TRANSITION = {
   duration: 0.18,
@@ -323,6 +324,15 @@ export function AgentInstanceEditDialog({
     provider: providerForDiscovery,
     selectedRuntime,
   });
+
+  const { globalConfig } = useGlobalAgentConfig();
+
+  // Merge global + persona env for the inherited display hint in EnvVarsEditor
+  // (inside EditAgentAdvancedFields). Persona wins over global on collision
+  // (higher precedence), so persona keys shadow global for display consistency.
+  const inheritedWithGlobal = React.useMemo(() => {
+    return { ...globalConfig.env_vars, ...inheritedEnvVars };
+  }, [globalConfig.env_vars, inheritedEnvVars]);
 
   // Clear model when provider scope changes and current model is no longer valid.
   React.useEffect(() => {
@@ -912,7 +922,7 @@ export function AgentInstanceEditDialog({
                       disabled={updateMutation.isPending}
                       envVars={envVars}
                       fileSatisfiedEnvKeys={fileSatisfiedEnvKeys}
-                      inheritedEnvVars={inheritedEnvVars}
+                      inheritedEnvVars={inheritedWithGlobal}
                       inheritHarness={inheritHarness}
                       linkedPersona={linkedPersona}
                       mcpCommand={mcpCommand}
