@@ -42,8 +42,7 @@ import { meshPrepareRelayMeshClient } from "@/shared/api/tauriMesh";
 import type { MeshServeTarget } from "@/shared/api/tauriMesh";
 import { useLastRuntime } from "@/features/agents/lib/useLastRuntime";
 import {
-  getBakedSatisfiedEnvKeys,
-  requiredCredentialEnvKeys,
+  computeLocalModeGate,
   runtimeSupportsLlmProviderSelection,
   shouldClearKnownModelForSelectionScope,
 } from "./personaDialogPickers";
@@ -189,44 +188,39 @@ export function CreateAgentDialog({
   );
   const { data: bakedEnvKeys } = useBakedBuildEnvKeysQuery({ enabled: open });
 
-  // All required keys for the selected runtime + provider.
-  const allRequiredEnvKeys = React.useMemo(
+  // Derive required/file-satisfied env keys from the shared gate so the dialog
+  // and readiness.rs always agree on which keys are required. Passing global
+  // provider/model/env ensures an agent inheriting a global provider shows the
+  // correct credential rows even before the user sets a per-agent provider.
+  // bakedEnvKeys: Block-internal builds — baked keys are fully silenced.
+  const { requiredEnvKeys, fileSatisfiedEnvKeys } = React.useMemo(
     () =>
-      requiredCredentialEnvKeys(
-        selectedRuntimeId,
-        runtimeSupportsLlmProviderSelection(selectedRuntimeId) ? provider : "",
-      ),
-    [selectedRuntimeId, provider],
-  );
-
-  // Keys covered by the baked build env (Block-internal builds only) — silenced,
-  // produce no amber row or info row.
-  const bakedSatisfiedEnvKeys = React.useMemo(
-    () => getBakedSatisfiedEnvKeys(allRequiredEnvKeys, envVars, bakedEnvKeys),
-    [allRequiredEnvKeys, envVars, bakedEnvKeys],
-  );
-
-  // Credential keys satisfied by the runtime file config (e.g. goose config.yaml).
-  // These are shown as "Set in goose config" rows rather than amber required rows.
-  const fileSatisfiedEnvKeys = React.useMemo(() => {
-    if (!runtimeFileConfig) return [] as string[];
-    return allRequiredEnvKeys.filter(
-      (key) =>
-        (envVars[key] ?? "").length === 0 &&
-        !bakedSatisfiedEnvKeys.includes(key) &&
-        runtimeFileConfig.satisfiedEnvKeys.includes(key),
-    );
-  }, [runtimeFileConfig, allRequiredEnvKeys, envVars, bakedSatisfiedEnvKeys]);
-
-  const requiredEnvKeys = React.useMemo(
-    () =>
-      allRequiredEnvKeys.filter(
-        (key) =>
-          !bakedSatisfiedEnvKeys.includes(key) &&
-          !fileSatisfiedEnvKeys.includes(key) &&
-          (globalConfig.env_vars[key] ?? "").length === 0,
-      ),
-    [allRequiredEnvKeys, bakedSatisfiedEnvKeys, fileSatisfiedEnvKeys, globalConfig.env_vars],
+      computeLocalModeGate({
+        bakedEnvKeys,
+        envVars,
+        globalEnvVars: globalConfig.env_vars,
+        globalProvider: globalConfig.provider ?? "",
+        globalModel: globalConfig.model ?? "",
+        isProviderMode,
+        model,
+        provider,
+        runtimeId: selectedRuntimeId,
+        runtimeFileConfig,
+        useMesh,
+      }),
+    [
+      bakedEnvKeys,
+      envVars,
+      globalConfig.env_vars,
+      globalConfig.provider,
+      globalConfig.model,
+      isProviderMode,
+      model,
+      provider,
+      runtimeFileConfig,
+      selectedRuntimeId,
+      useMesh,
+    ],
   );
 
   // Clear model when provider scope changes, mirroring AgentInstanceEditDialog.
