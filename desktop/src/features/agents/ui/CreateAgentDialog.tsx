@@ -223,9 +223,10 @@ export function CreateAgentDialog({
       allRequiredEnvKeys.filter(
         (key) =>
           !bakedSatisfiedEnvKeys.includes(key) &&
-          !fileSatisfiedEnvKeys.includes(key),
+          !fileSatisfiedEnvKeys.includes(key) &&
+          (globalConfig.env_vars[key] ?? "").length === 0,
       ),
-    [allRequiredEnvKeys, bakedSatisfiedEnvKeys, fileSatisfiedEnvKeys],
+    [allRequiredEnvKeys, bakedSatisfiedEnvKeys, fileSatisfiedEnvKeys, globalConfig.env_vars],
   );
 
   // Clear model when provider scope changes, mirroring AgentInstanceEditDialog.
