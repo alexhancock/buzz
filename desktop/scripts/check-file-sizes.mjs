@@ -120,7 +120,8 @@ const overrides = new Map([
   // +2 readiness integration tests for flat-DATABRICKS_HOST canonicalization fix.
   // +1 cargo fmt whitespace reformat (readiness.rs closures inline after rebase).
   // +2 unit tests for cli_login_requirements resolve_command integration (DMG PATH fix).
-  ["src-tauri/src/managed_agents/readiness.rs", 1215],
+  // +16: resolve_effective_agent_env + global-config readiness wiring (#1448 base).
+  ["src-tauri/src/managed_agents/readiness.rs", 1231],
   // applyWorkspace reposDir parameter plus the validateReposDir binding,
   // threaded through Tauri invokes for configurable repos_dir, plus the
   // harness-persona-sync `harnessOverride` create-input bit — load-bearing

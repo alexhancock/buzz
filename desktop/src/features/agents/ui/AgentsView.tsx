@@ -23,6 +23,7 @@ import { useManagedAgentActions } from "./useManagedAgentActions";
 import { usePersonaActions } from "./usePersonaActions";
 import { useTeamActions } from "./useTeamActions";
 import { useProfilePanel } from "@/shared/context/ProfilePanelContext";
+import { GlobalAgentConfigSettingsCard } from "@/features/settings/ui/GlobalAgentConfigSettingsCard";
 
 export function AgentsView() {
   const { openPersonaProfilePanel, openProfilePanel } = useProfilePanel();
@@ -168,6 +169,8 @@ export function AgentsView() {
               personas={personas.libraryPersonas}
               teams={teamActions.teams}
             />
+
+            <GlobalAgentConfigSettingsCard />
 
             <RelayDirectorySection
               error={
