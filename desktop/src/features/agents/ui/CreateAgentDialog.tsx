@@ -181,7 +181,8 @@ export function CreateAgentDialog({
   });
 
   // Full required credential key list for EnvVarsEditor amber locked rows —
-  // includes already-satisfied keys, not just missing ones.
+  // `requiredEnvKeys` includes locally-filled keys (row stays stable while
+  // typing), excludes globally/file-satisfied keys shown differently.
   const { data: runtimeFileConfig } = useRuntimeFileConfigQuery(
     selectedRuntimeId,
     { enabled: open },
