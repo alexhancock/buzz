@@ -54,6 +54,7 @@ import { NonMemberMentionDialog } from "./NonMemberMentionDialog";
 import { useMentionSendFlow } from "./useMentionSendFlow";
 import { useComposerContentState } from "./useComposerContentState";
 import { useDraftPersistLifecycle } from "./useDraftPersistSnapshot";
+import { DictationButton, useComposerDictation } from "@/features/dictation";
 
 type MessageComposerProps = {
   channelId?: string | null;
@@ -265,6 +266,15 @@ function MessageComposerImpl({
     emojiAutocomplete.isEmojiAutocompleteOpen;
 
   const submitMessageRef = React.useRef<() => void>(() => {});
+
+  const dictation = useComposerDictation({
+    contentRef,
+    disabled,
+    isSending,
+    setComposerContentFromText,
+    submitMessageRef,
+  });
+
   const composerScrollRef = React.useRef<HTMLDivElement>(null);
 
   // Set after `useLinkEditor` exists below; the editor's link-click handler
@@ -994,7 +1004,12 @@ function MessageComposerImpl({
             <MessageComposerToolbar
               composerDisabled={disabled}
               editor={richText.editor}
-              extraActions={toolbarExtraActions}
+              extraActions={
+                <>
+                  <DictationButton dictation={dictation} disabled={disabled} />
+                  {toolbarExtraActions}
+                </>
+              }
               formattingDisabled={disabled}
               isEmojiPickerOpen={isEmojiPickerOpen}
               isFormattingOpen={isFormattingOpen}
