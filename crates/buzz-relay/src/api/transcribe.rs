@@ -3,26 +3,34 @@
 //! When `BUZZ_OPENAI_API_KEY` is configured, the relay can mint ephemeral client
 //! secrets for the OpenAI Realtime API. The desktop app uses these to establish a
 //! WebRTC connection for real-time speech-to-text dictation.
+//!
+//! Both endpoints require NIP-98 auth (same as `/events`, `/query`, `/count`).
 
-use axum::{extract::State, http::StatusCode, response::Json};
-use serde::Serialize;
 use std::sync::Arc;
 
+use axum::{
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    response::Json,
+};
+use serde::Serialize;
+use serde_json::Value;
+
 use crate::state::AppState;
+
+use super::api_error;
 
 const OPENAI_REALTIME_SESSIONS_URL: &str = "https://api.openai.com/v1/realtime/sessions";
 const DEFAULT_TRANSCRIPTION_MODEL: &str = "whisper-1";
 
-/// Response for `GET /transcribe/status`, reporting whether the relay can mint
-/// OpenAI Realtime transcription sessions and which model it will use.
+/// Response for `GET /transcribe/status`.
 #[derive(Serialize)]
 pub struct TranscribeStatus {
     configured: bool,
     model: String,
 }
 
-/// Response for `POST /transcribe/session`, carrying the ephemeral OpenAI
-/// Realtime client secret the desktop app uses to open its WebRTC connection.
+/// Response for `POST /transcribe/session`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscribeSession {
@@ -31,27 +39,36 @@ pub struct TranscribeSession {
 }
 
 /// `GET /transcribe/status` — check if transcription is configured.
-pub async fn transcribe_status(State(state): State<Arc<AppState>>) -> Json<TranscribeStatus> {
-    Json(TranscribeStatus {
+///
+/// Requires NIP-98 auth. Returns whether the relay has an OpenAI API key
+/// configured for real-time transcription.
+pub async fn transcribe_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<TranscribeStatus>, (StatusCode, Json<Value>)> {
+    authenticate(&state, &headers, "/transcribe/status", "GET").await?;
+
+    Ok(Json(TranscribeStatus {
         configured: state.config.openai_api_key.is_some(),
         model: transcription_model(),
-    })
+    }))
 }
 
 /// `POST /transcribe/session` — create an ephemeral OpenAI Realtime session.
 ///
-/// Returns a short-lived client secret that the frontend uses to establish
-/// a WebRTC connection directly with OpenAI for real-time transcription.
+/// Requires NIP-98 auth. Returns a short-lived client secret that the frontend
+/// uses to establish a WebRTC connection directly with OpenAI for real-time
+/// transcription.
 pub async fn create_transcribe_session(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<TranscribeSession>, (StatusCode, Json<serde_json::Value>)> {
+    headers: HeaderMap,
+) -> Result<Json<TranscribeSession>, (StatusCode, Json<Value>)> {
+    authenticate(&state, &headers, "/transcribe/session", "POST").await?;
+
     let api_key = state.config.openai_api_key.as_deref().ok_or_else(|| {
-        (
+        api_error(
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({
-                "error": "transcription_not_configured",
-                "message": "Transcription is not configured on this relay"
-            })),
+            "transcription is not configured on this relay",
         )
     })?;
 
@@ -77,12 +94,9 @@ pub async fn create_transcribe_session(
         .await
         .map_err(|e| {
             tracing::error!("OpenAI realtime session request failed: {e}");
-            (
+            api_error(
                 StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({
-                    "error": "upstream_error",
-                    "message": "Failed to create transcription session"
-                })),
+                "failed to create transcription session",
             )
         })?;
 
@@ -90,34 +104,25 @@ pub async fn create_transcribe_session(
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
         tracing::error!("OpenAI realtime session error ({status}): {body}");
-        return Err((
+        return Err(api_error(
             StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({
-                "error": "upstream_error",
-                "message": "OpenAI rejected the transcription session request"
-            })),
+            "OpenAI rejected the transcription session request",
         ));
     }
 
-    let body: serde_json::Value = response.json().await.map_err(|e| {
+    let body: Value = response.json().await.map_err(|e| {
         tracing::error!("OpenAI realtime session response parse error: {e}");
-        (
+        api_error(
             StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({
-                "error": "upstream_error",
-                "message": "Invalid response from transcription service"
-            })),
+            "invalid response from transcription service",
         )
     })?;
 
     let client_secret = extract_client_secret(&body).ok_or_else(|| {
         tracing::error!("OpenAI realtime session response missing client_secret: {body}");
-        (
+        api_error(
             StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({
-                "error": "upstream_error",
-                "message": "Transcription service returned unexpected response"
-            })),
+            "transcription service returned unexpected response",
         )
     })?;
 
@@ -127,6 +132,53 @@ pub async fn create_transcribe_session(
     }))
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Authenticate the request using the same NIP-98 / X-Pubkey pattern as the
+/// bridge endpoints, plus replay detection and relay membership enforcement.
+async fn authenticate(
+    state: &AppState,
+    headers: &HeaderMap,
+    path: &str,
+    method: &str,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    let raw_host = headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let tenant = crate::tenant::bind_community(&state.db, raw_host)
+        .await
+        .map_err(|_| {
+            api_error(
+                StatusCode::NOT_FOUND,
+                "relay: no community is configured for this host",
+            )
+        })?;
+
+    let url = super::bridge::nip98_expected_url(&state.config.relay_url, &tenant, path);
+    let (pubkey, event_id_bytes) = super::bridge::verify_bridge_auth(
+        headers,
+        method,
+        &url,
+        None,
+        state.config.require_auth_token,
+    )?;
+    super::bridge::check_nip98_replay(state, &tenant, event_id_bytes).await?;
+
+    // Enforce relay membership (with NIP-OA fallback via x-auth-tag header).
+    let pubkey_bytes = pubkey.to_bytes().to_vec();
+    let auth_tag = headers.get("x-auth-tag").and_then(|v| v.to_str().ok());
+    super::relay_members::enforce_relay_membership(
+        state,
+        tenant.community(),
+        &pubkey_bytes,
+        auth_tag,
+    )
+    .await?;
+
+    Ok(())
+}
+
 fn transcription_model() -> String {
     std::env::var("BUZZ_TRANSCRIPTION_MODEL")
         .ok()
@@ -134,7 +186,7 @@ fn transcription_model() -> String {
         .unwrap_or_else(|| DEFAULT_TRANSCRIPTION_MODEL.to_string())
 }
 
-fn extract_client_secret(value: &serde_json::Value) -> Option<String> {
+fn extract_client_secret(value: &Value) -> Option<String> {
     // Shape 1: { "client_secret": { "value": "..." } }
     if let Some(cs) = value.get("client_secret") {
         if let Some(v) = cs.get("value").and_then(|v| v.as_str()) {
