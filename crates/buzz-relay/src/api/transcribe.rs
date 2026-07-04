@@ -20,7 +20,8 @@ use crate::state::AppState;
 
 use super::api_error;
 
-const OPENAI_REALTIME_SESSIONS_URL: &str = "https://api.openai.com/v1/realtime/sessions";
+const OPENAI_REALTIME_CLIENT_SECRETS_URL: &str =
+    "https://api.openai.com/v1/realtime/client_secrets";
 const DEFAULT_TRANSCRIPTION_MODEL: &str = "whisper-1";
 
 /// Response for `GET /transcribe/status`.
@@ -76,17 +77,19 @@ pub async fn create_transcribe_session(
 
     let client = reqwest::Client::new();
     let response = client
-        .post(OPENAI_REALTIME_SESSIONS_URL)
+        .post(OPENAI_REALTIME_CLIENT_SECRETS_URL)
         .header("Authorization", format!("Bearer {api_key}"))
         .header("Content-Type", "application/json")
         .json(&serde_json::json!({
-            "model": "gpt-4o-mini-realtime-preview",
-            "modalities": ["text"],
-            "input_audio_transcription": {
-                "model": model,
-            },
-            "turn_detection": {
-                "type": "server_vad",
+            "session": {
+                "model": "gpt-4o-mini-realtime-preview",
+                "modalities": ["text"],
+                "input_audio_transcription": {
+                    "model": model,
+                },
+                "turn_detection": {
+                    "type": "server_vad",
+                }
             }
         }))
         .timeout(std::time::Duration::from_secs(10))

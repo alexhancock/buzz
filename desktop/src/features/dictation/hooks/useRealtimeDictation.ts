@@ -15,6 +15,7 @@ import {
   createPeerConnection,
   createTranscriptSegmentState,
   flushAudioBuffer,
+  getTranscriptText,
   mergeTranscriptEvent,
 } from "../lib/realtimeAudio";
 
@@ -116,8 +117,7 @@ export function useRealtimeDictation({
       return;
     }
 
-    const prevText =
-      segmentStateRef.current.committed + segmentStateRef.current.pendingDelta;
+    const prevText = getTranscriptText(segmentStateRef.current);
     const merged = mergeTranscriptEvent(segmentStateRef.current, event);
 
     if (merged === prevText) return;

@@ -56,49 +56,93 @@ export async function connectPeerConnection(options: {
 }
 
 /**
- * State for tracking the current transcription segment. Completed events
- * carry the final text for the same segment that prior deltas built up,
- * potentially with corrections/punctuation. We track the delta accumulation
- * so we can replace it with the finalized text on completion.
+ * Per-item tracking for a single transcription turn. OpenAI's Realtime API
+ * sends delta and completed events tagged with an `item_id`; completed events
+ * for different turns can arrive out of order, so we reconcile by item id.
  */
-export interface TranscriptSegmentState {
-  /** Text committed from previous (completed) segments. */
-  committed: string;
-  /** Accumulated delta text for the in-progress segment. */
-  pendingDelta: string;
-}
-
-export function createTranscriptSegmentState(): TranscriptSegmentState {
-  return { committed: "", pendingDelta: "" };
+interface ItemSegment {
+  /** Accumulated delta text (replaced by finalized on completion). */
+  pending: string;
+  /** Finalized text (set once the completed event arrives). */
+  finalized: string | null;
 }
 
 /**
- * Merge a transcript event into the segment state.
+ * State for tracking transcription segments keyed by item id.
+ * Maintains insertion order so the full transcript is reconstructed
+ * in the order items were first seen.
+ */
+export interface TranscriptSegmentState {
+  /** Ordered item ids (insertion order = utterance order). */
+  itemOrder: string[];
+  /** Per-item segment data. */
+  items: Map<string, ItemSegment>;
+}
+
+export function createTranscriptSegmentState(): TranscriptSegmentState {
+  return { itemOrder: [], items: new Map() };
+}
+
+/** Get the current full transcript text from segment state. */
+export function getTranscriptText(state: TranscriptSegmentState): string {
+  let result = "";
+  for (const id of state.itemOrder) {
+    const seg = state.items.get(id);
+    if (!seg) continue;
+    result += seg.finalized ?? seg.pending;
+  }
+  return result;
+}
+
+/** Internal: get or create the segment for an item. */
+function getOrCreateItem(
+  state: TranscriptSegmentState,
+  itemId: string,
+): ItemSegment {
+  let seg = state.items.get(itemId);
+  if (!seg) {
+    seg = { pending: "", finalized: null };
+    state.items.set(itemId, seg);
+    state.itemOrder.push(itemId);
+  }
+  return seg;
+}
+
+/**
+ * Merge a transcript event into the segment state, keyed by `item_id`.
  *
- * - Delta events: append to `pendingDelta`.
- * - Completed events: replace `pendingDelta` with the finalized transcript,
- *   then commit it (move to `committed` and reset `pendingDelta`).
+ * - Delta events: append to the item's `pending` text.
+ * - Completed events: store `finalized` text, replacing accumulated deltas.
  *
- * Returns the full merged text (committed + pending).
+ * Returns the full merged text across all items in order.
  */
 export function mergeTranscriptEvent(
   state: TranscriptSegmentState,
   event: TranscriptEvent,
 ): string {
+  // Use item_id from the event; fall back to a synthetic key for events
+  // that lack one (shouldn't happen in practice, but be defensive).
+  const itemId = event.item_id ?? "__default__";
+
   if (event.type === TRANSCRIPT_DELTA_EVENT) {
+    const seg = getOrCreateItem(state, itemId);
     const delta = event.delta ?? "";
     if (delta) {
-      state.pendingDelta += delta;
+      seg.pending += delta;
     }
   } else if (event.type === TRANSCRIPT_COMPLETED_EVENT) {
-    const finalText = event.transcript ?? "";
-    // Replace the accumulated deltas with the finalized text, then commit.
-    const separator = state.committed && finalText ? "" : "";
-    state.committed = state.committed + separator + finalText;
-    state.pendingDelta = "";
+    const seg = getOrCreateItem(state, itemId);
+    seg.finalized = event.transcript ?? "";
   }
 
-  return state.committed + state.pendingDelta;
+  // Reconstruct full text from all items in order.
+  let result = "";
+  for (const id of state.itemOrder) {
+    const seg = state.items.get(id);
+    if (!seg) continue;
+    result += seg.finalized ?? seg.pending;
+  }
+  return result;
 }
 
 // ── Audio buffer capture ──────────────────────────────────────────────────
