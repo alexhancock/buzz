@@ -55,24 +55,50 @@ export async function connectPeerConnection(options: {
   });
 }
 
-export function mergeTranscriptSegment(
-  currentText: string,
-  segmentText: string,
+/**
+ * State for tracking the current transcription segment. Completed events
+ * carry the final text for the same segment that prior deltas built up,
+ * potentially with corrections/punctuation. We track the delta accumulation
+ * so we can replace it with the finalized text on completion.
+ */
+export interface TranscriptSegmentState {
+  /** Text committed from previous (completed) segments. */
+  committed: string;
+  /** Accumulated delta text for the in-progress segment. */
+  pendingDelta: string;
+}
+
+export function createTranscriptSegmentState(): TranscriptSegmentState {
+  return { committed: "", pendingDelta: "" };
+}
+
+/**
+ * Merge a transcript event into the segment state.
+ *
+ * - Delta events: append to `pendingDelta`.
+ * - Completed events: replace `pendingDelta` with the finalized transcript,
+ *   then commit it (move to `committed` and reset `pendingDelta`).
+ *
+ * Returns the full merged text (committed + pending).
+ */
+export function mergeTranscriptEvent(
+  state: TranscriptSegmentState,
   event: TranscriptEvent,
 ): string {
-  if (!segmentText) return currentText;
-  if (!currentText) return segmentText;
-
-  // Completed events re-send the full segment text; skip if already present.
-  if (event.type === TRANSCRIPT_COMPLETED_EVENT) {
-    const normalizedCurrent = currentText.trimEnd().toLowerCase();
-    const normalizedText = segmentText.trim().toLowerCase();
-    if (normalizedCurrent.endsWith(normalizedText)) {
-      return currentText;
+  if (event.type === TRANSCRIPT_DELTA_EVENT) {
+    const delta = event.delta ?? "";
+    if (delta) {
+      state.pendingDelta += delta;
     }
+  } else if (event.type === TRANSCRIPT_COMPLETED_EVENT) {
+    const finalText = event.transcript ?? "";
+    // Replace the accumulated deltas with the finalized text, then commit.
+    const separator = state.committed && finalText ? "" : "";
+    state.committed = state.committed + separator + finalText;
+    state.pendingDelta = "";
   }
 
-  return currentText + segmentText;
+  return state.committed + state.pendingDelta;
 }
 
 // ── Audio buffer capture ──────────────────────────────────────────────────

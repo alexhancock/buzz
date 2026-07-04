@@ -7,13 +7,15 @@ import {
 import {
   type AudioBufferCapture,
   type TranscriptEvent,
+  type TranscriptSegmentState,
   TRANSCRIPT_COMPLETED_EVENT,
   TRANSCRIPT_DELTA_EVENT,
   connectPeerConnection,
   createAudioBufferCapture,
   createPeerConnection,
+  createTranscriptSegmentState,
   flushAudioBuffer,
-  mergeTranscriptSegment,
+  mergeTranscriptEvent,
 } from "../lib/realtimeAudio";
 
 interface UseRealtimeDictationOptions {
@@ -50,7 +52,9 @@ export function useRealtimeDictation({
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioCaptureRef = useRef<AudioBufferCapture | null>(null);
-  const transcriptRef = useRef("");
+  const segmentStateRef = useRef<TranscriptSegmentState>(
+    createTranscriptSegmentState(),
+  );
   const activeRunIdRef = useRef(0);
   const onRecordingStartRef = useRef(onRecordingStart);
   const onTranscriptTextRef = useRef(onTranscriptText);
@@ -112,12 +116,12 @@ export function useRealtimeDictation({
       return;
     }
 
-    const text = event.delta ?? event.transcript ?? "";
-    const merged = mergeTranscriptSegment(transcriptRef.current, text, event);
+    const prevText =
+      segmentStateRef.current.committed + segmentStateRef.current.pendingDelta;
+    const merged = mergeTranscriptEvent(segmentStateRef.current, event);
 
-    if (merged === transcriptRef.current) return;
+    if (merged === prevText) return;
 
-    transcriptRef.current = merged;
     onTranscriptTextRef.current(merged);
     setIsTranscribing(event.type !== TRANSCRIPT_COMPLETED_EVENT);
   }, []);
@@ -135,7 +139,7 @@ export function useRealtimeDictation({
     let dataChannel: RTCDataChannel | null = null;
 
     setIsStarting(true);
-    transcriptRef.current = "";
+    segmentStateRef.current = createTranscriptSegmentState();
     onRecordingStartRef.current?.();
 
     try {
@@ -191,6 +195,12 @@ export function useRealtimeDictation({
       const channelToFlush = dataChannel;
       const captureToFlush = audioCapture;
       dataChannel.addEventListener("open", () => {
+        // If the user stopped (or restarted) recording between the SDP
+        // exchange and the channel opening, drop this run's buffered audio.
+        if (isStaleRun()) {
+          captureToFlush.close();
+          return;
+        }
         flushAudioBuffer(channelToFlush, captureToFlush.chunks);
         captureToFlush.close();
         audioCaptureRef.current = null;
