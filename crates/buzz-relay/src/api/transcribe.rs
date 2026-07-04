@@ -13,12 +13,16 @@ use crate::state::AppState;
 const OPENAI_REALTIME_SESSIONS_URL: &str = "https://api.openai.com/v1/realtime/sessions";
 const DEFAULT_TRANSCRIPTION_MODEL: &str = "whisper-1";
 
+/// Response for `GET /transcribe/status`, reporting whether the relay can mint
+/// OpenAI Realtime transcription sessions and which model it will use.
 #[derive(Serialize)]
 pub struct TranscribeStatus {
     configured: bool,
     model: String,
 }
 
+/// Response for `POST /transcribe/session`, carrying the ephemeral OpenAI
+/// Realtime client secret the desktop app uses to open its WebRTC connection.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscribeSession {
