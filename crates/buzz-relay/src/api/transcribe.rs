@@ -81,16 +81,18 @@ pub async fn create_transcribe_session(
         .header("Authorization", format!("Bearer {api_key}"))
         .header("Content-Type", "application/json")
         .json(&serde_json::json!({
-            "type": "transcription",
-            "audio": {
-                "input": {
-                    "transcription": {
-                        "model": model,
+            "session": {
+                "type": "transcription",
+                "audio": {
+                    "input": {
+                        "transcription": {
+                            "model": model,
+                        },
+                        "turn_detection": {
+                            "type": "server_vad",
+                        }
                     }
                 }
-            },
-            "turn_detection": {
-                "type": "server_vad",
             }
         }))
         .timeout(std::time::Duration::from_secs(10))
