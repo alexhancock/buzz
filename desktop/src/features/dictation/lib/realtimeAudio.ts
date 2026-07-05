@@ -89,7 +89,12 @@ export function getTranscriptText(state: TranscriptSegmentState): string {
   for (const id of state.itemOrder) {
     const seg = state.items.get(id);
     if (!seg) continue;
-    result += seg.finalized ?? seg.pending;
+    const text = seg.finalized ?? seg.pending;
+    if (!text) continue;
+    if (result && !result.endsWith(" ") && !text.startsWith(" ")) {
+      result += " ";
+    }
+    result += text;
   }
   return result;
 }
@@ -136,13 +141,7 @@ export function mergeTranscriptEvent(
   }
 
   // Reconstruct full text from all items in order.
-  let result = "";
-  for (const id of state.itemOrder) {
-    const seg = state.items.get(id);
-    if (!seg) continue;
-    result += seg.finalized ?? seg.pending;
-  }
-  return result;
+  return getTranscriptText(state);
 }
 
 // ── Audio buffer capture ──────────────────────────────────────────────────

@@ -63,8 +63,13 @@ export function useDictation({
         return;
       }
 
+      // Set the text first so the composer shows the final dictated content,
+      // then trigger send. We intentionally do NOT clear the composer here —
+      // the send flow in MessageComposer handles clearing on successful send.
+      // If a mention dialog opens (non-member mention), the text stays in the
+      // composer so the user doesn't lose their dictated message.
+      setText(textWithoutPhrase.trim());
       onSend(textWithoutPhrase.trim());
-      setText("");
       lastTranscriptRef.current = "";
     },
     [autoSubmitPhrases, getText, onSend, isSendBlockedRef, setText],
