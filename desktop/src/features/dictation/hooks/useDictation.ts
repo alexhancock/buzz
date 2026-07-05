@@ -1,3 +1,4 @@
+import type * as React from "react";
 import { useCallback, useMemo, useRef } from "react";
 import {
   DEFAULT_AUTO_SUBMIT_PHRASE,
@@ -8,35 +9,33 @@ import {
 import { useRealtimeDictation } from "./useRealtimeDictation";
 
 interface UseDictationOptions {
-  /** Current composer text */
-  text: string;
+  /** Returns the current composer text (must be fresh — synced from editor). */
+  getText: () => string;
   /** Set composer text */
   setText: (value: string) => void;
   /** Send the message */
   onSend: (text: string) => void;
-  /** Whether sending is currently blocked */
-  sendDisabled?: boolean;
+  /** Ref that is `true` when sending is blocked (uploading, preparing mention, etc.) */
+  isSendBlockedRef?: React.MutableRefObject<boolean>;
 }
 
 export function useDictation({
-  text,
+  getText,
   setText,
   onSend,
-  sendDisabled = false,
+  isSendBlockedRef,
 }: UseDictationOptions) {
   const autoSubmitPhrases = useMemo(
     () => parseAutoSubmitPhrases(DEFAULT_AUTO_SUBMIT_PHRASE),
     [],
   );
   const stopRecordingRef = useRef<() => void>(() => {});
-  const textRef = useRef(text);
-  textRef.current = text;
   const lastTranscriptRef = useRef("");
 
   const handleTranscript = useCallback(
     (transcript: string) => {
       const previous = lastTranscriptRef.current;
-      const latest = textRef.current;
+      const latest = getText();
       const merged = replaceTrailingTranscribedText(
         latest,
         previous,
@@ -46,7 +45,6 @@ export function useDictation({
 
       if (!match) {
         setText(merged);
-        textRef.current = merged;
         lastTranscriptRef.current = transcript;
         return;
       }
@@ -60,18 +58,16 @@ export function useDictation({
 
       stopRecordingRef.current();
 
-      if (sendDisabled) {
+      if (isSendBlockedRef?.current) {
         setText(textWithoutPhrase);
-        textRef.current = textWithoutPhrase;
         return;
       }
 
       onSend(textWithoutPhrase.trim());
       setText("");
-      textRef.current = "";
       lastTranscriptRef.current = "";
     },
-    [autoSubmitPhrases, onSend, sendDisabled, setText],
+    [autoSubmitPhrases, getText, onSend, isSendBlockedRef, setText],
   );
 
   const dictation = useRealtimeDictation({

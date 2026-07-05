@@ -82,8 +82,7 @@ pub async fn create_transcribe_session(
         .header("Content-Type", "application/json")
         .json(&serde_json::json!({
             "session": {
-                "model": "gpt-4o-mini-realtime-preview",
-                "modalities": ["text"],
+                "type": "transcription",
                 "input_audio_transcription": {
                     "model": model,
                 },

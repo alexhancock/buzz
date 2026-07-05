@@ -266,17 +266,17 @@ function MessageComposerImpl({
     emojiAutocomplete.isEmojiAutocompleteOpen;
 
   const submitMessageRef = React.useRef<() => void>(() => {});
-  const setEditorContentRef = React.useRef<(t: string) => void>(() => {});
+  const setEditorContentRef = React.useRef<(text: string) => void>(() => {});
   const dictation = useComposerDictation({
-    contentRef,
-    disabled,
-    isSending,
+    syncContentRef: syncContentRefFromEditorRef,
+    disabledRef,
+    isSendingRef,
+    isUploadingRef,
     setComposerContent,
     setEditorContentRef,
     submitMessageRef,
   });
   const composerScrollRef = React.useRef<HTMLDivElement>(null);
-
   // Set after `useLinkEditor` exists below; the editor's link-click handler
   // delegates through this ref to break the hook ordering cycle (the editor
   // needs `onEditLink`, but the link editor needs the editor's `richText`).

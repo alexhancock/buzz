@@ -1,10 +1,13 @@
 import type * as React from "react";
+import { useRef } from "react";
 import { useDictation } from "./useDictation";
 
 interface UseComposerDictationOptions {
-  contentRef: React.MutableRefObject<string>;
-  disabled: boolean;
-  isSending: boolean;
+  /** Ref to a function that syncs contentRef from the Tiptap editor and returns it. */
+  syncContentRef: React.MutableRefObject<() => string>;
+  disabledRef: React.MutableRefObject<boolean>;
+  isSendingRef: React.MutableRefObject<boolean>;
+  isUploadingRef: React.MutableRefObject<boolean>;
   /** Updates contentRef + isContentEmpty state. */
   setComposerContent: (text: string) => void;
   /** Ref to a function that updates the Tiptap editor document. */
@@ -14,18 +17,23 @@ interface UseComposerDictationOptions {
 
 /**
  * Thin wrapper around `useDictation` pre-wired for the MessageComposer's
- * state management (contentRef, setComposerContent, editor, submitMessageRef).
+ * state management (syncContentRef, setComposerContent, editor, submitMessageRef).
  */
 export function useComposerDictation({
-  contentRef,
-  disabled,
-  isSending,
+  syncContentRef,
+  disabledRef,
+  isSendingRef,
+  isUploadingRef,
   setComposerContent,
   setEditorContentRef,
   submitMessageRef,
 }: UseComposerDictationOptions) {
+  const isSendBlockedRef = useRef(false);
+  isSendBlockedRef.current =
+    disabledRef.current || isSendingRef.current || isUploadingRef.current;
+
   return useDictation({
-    text: contentRef.current,
+    getText: () => syncContentRef.current(),
     setText: (text) => {
       setComposerContent(text);
       setEditorContentRef.current(text);
@@ -38,6 +46,6 @@ export function useComposerDictation({
       // holds the dictated text.
       submitMessageRef.current();
     },
-    sendDisabled: disabled || isSending,
+    isSendBlockedRef,
   });
 }
