@@ -9,12 +9,14 @@ export const TRANSCRIPT_DELTA_EVENT =
   "conversation.item.input_audio_transcription.delta";
 export const TRANSCRIPT_COMPLETED_EVENT =
   "conversation.item.input_audio_transcription.completed";
+export const BUFFER_COMMITTED_EVENT = "input_audio_buffer.committed";
 
 const MAX_BUFFER_CHUNKS = 500; // ~10s at 20ms per chunk
 
 export type TranscriptEvent = {
   type?: string;
   item_id?: string;
+  previous_item_id?: string;
   content_index?: number;
   delta?: string;
   transcript?: string;
@@ -99,16 +101,32 @@ export function getTranscriptText(state: TranscriptSegmentState): string {
   return result;
 }
 
-/** Internal: get or create the segment for an item. */
+/**
+ * Internal: get or create the segment for an item.
+ * When `previousItemId` is provided (from committed events), the new item is
+ * inserted after that item in `itemOrder` to preserve the server's utterance
+ * order — even if transcript events for a later item arrive first.
+ */
 function getOrCreateItem(
   state: TranscriptSegmentState,
   itemId: string,
+  previousItemId?: string,
 ): ItemSegment {
   let seg = state.items.get(itemId);
   if (!seg) {
     seg = { pending: "", finalized: null };
     state.items.set(itemId, seg);
-    state.itemOrder.push(itemId);
+    if (previousItemId) {
+      const prevIndex = state.itemOrder.indexOf(previousItemId);
+      if (prevIndex !== -1) {
+        state.itemOrder.splice(prevIndex + 1, 0, itemId);
+      } else {
+        // Previous item not yet seen — append (best effort).
+        state.itemOrder.push(itemId);
+      }
+    } else {
+      state.itemOrder.push(itemId);
+    }
   }
   return seg;
 }
@@ -116,6 +134,8 @@ function getOrCreateItem(
 /**
  * Merge a transcript event into the segment state, keyed by `item_id`.
  *
+ * - Committed events: register the item in the correct order using
+ *   `previous_item_id` from the server, before any transcript arrives.
  * - Delta events: append to the item's `pending` text.
  * - Completed events: store `finalized` text, replacing accumulated deltas.
  *
@@ -129,7 +149,10 @@ export function mergeTranscriptEvent(
   // that lack one (shouldn't happen in practice, but be defensive).
   const itemId = event.item_id ?? "__default__";
 
-  if (event.type === TRANSCRIPT_DELTA_EVENT) {
+  if (event.type === BUFFER_COMMITTED_EVENT) {
+    // Register the item in the correct position before transcripts arrive.
+    getOrCreateItem(state, itemId, event.previous_item_id ?? undefined);
+  } else if (event.type === TRANSCRIPT_DELTA_EVENT) {
     const seg = getOrCreateItem(state, itemId);
     const delta = event.delta ?? "";
     if (delta) {

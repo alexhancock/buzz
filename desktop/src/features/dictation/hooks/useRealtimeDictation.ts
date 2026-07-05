@@ -8,6 +8,7 @@ import {
   type AudioBufferCapture,
   type TranscriptEvent,
   type TranscriptSegmentState,
+  BUFFER_COMMITTED_EVENT,
   TRANSCRIPT_COMPLETED_EVENT,
   TRANSCRIPT_DELTA_EVENT,
   connectPeerConnection,
@@ -112,7 +113,8 @@ export function useRealtimeDictation({
 
     if (
       event.type !== TRANSCRIPT_DELTA_EVENT &&
-      event.type !== TRANSCRIPT_COMPLETED_EVENT
+      event.type !== TRANSCRIPT_COMPLETED_EVENT &&
+      event.type !== BUFFER_COMMITTED_EVENT
     ) {
       return;
     }
