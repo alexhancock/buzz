@@ -1,5 +1,5 @@
 import type * as React from "react";
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { useDictation } from "./useDictation";
 
 interface UseComposerDictationOptions {
@@ -13,6 +13,8 @@ interface UseComposerDictationOptions {
   /** Ref to a function that updates the Tiptap editor document. */
   setEditorContentRef: React.MutableRefObject<(text: string) => void>;
   submitMessageRef: React.MutableRefObject<() => void>;
+  /** When this key changes (channel/thread switch), active dictation is stopped. */
+  draftKey?: string | null;
 }
 
 /**
@@ -27,12 +29,13 @@ export function useComposerDictation({
   setComposerContent,
   setEditorContentRef,
   submitMessageRef,
+  draftKey,
 }: UseComposerDictationOptions) {
   const isSendBlockedRef = useRef(false);
   isSendBlockedRef.current =
     disabledRef.current || isSendingRef.current || isUploadingRef.current;
 
-  return useDictation({
+  const dictation = useDictation({
     getText: () => syncContentRef.current(),
     setText: (text) => {
       setComposerContent(text);
@@ -48,4 +51,13 @@ export function useComposerDictation({
     },
     isSendBlockedRef,
   });
+
+  // Stop dictation when the channel/thread changes so that transcript events
+  // from a stale WebRTC session don't leak into the wrong draft.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: draftKey is the sole trigger
+  useEffect(() => {
+    dictation.stopRecording();
+  }, [draftKey]);
+
+  return dictation;
 }
