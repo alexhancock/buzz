@@ -206,7 +206,8 @@ fn build_session_payload(model: &str) -> Value {
             "audio": {
                 "input": audio_input
             }
-        }
+        },
+        "expires_after": 60
     })
 }
 
@@ -424,6 +425,15 @@ mod tests {
         let payload = build_session_payload("whisper-1");
         let td = &payload["session"]["audio"]["input"]["turn_detection"];
         assert_eq!(td["type"], "server_vad");
+    }
+
+    #[test]
+    fn build_session_payload_sets_short_expires_after() {
+        use super::build_session_payload;
+        let payload = build_session_payload("whisper-1");
+        assert_eq!(payload["expires_after"], 60);
+        let payload2 = build_session_payload("gpt-realtime-whisper");
+        assert_eq!(payload2["expires_after"], 60);
     }
 
     #[test]
