@@ -258,7 +258,6 @@ function MessageComposerImpl({
   onEditSaveRef.current = onEditSave;
   onEditLastOwnMessageRef.current = onEditLastOwnMessage;
   editTargetRef.current = editTarget;
-
   const isAutocompleteOpenRef = React.useRef(false);
   isAutocompleteOpenRef.current =
     mentions.isMentionOpen ||
@@ -270,6 +269,7 @@ function MessageComposerImpl({
   const stopDictationRef = React.useRef<() => void>(() => {});
   const dictation = useComposerDictation({
     syncContentRef: syncContentRefFromEditorRef,
+    disabled,
     disabledRef,
     isSendingRef,
     isUploadingRef,

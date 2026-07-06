@@ -5,6 +5,8 @@ import { useDictation } from "./useDictation";
 interface UseComposerDictationOptions {
   /** Ref to a function that syncs contentRef from the Tiptap editor and returns it. */
   syncContentRef: React.MutableRefObject<() => string>;
+  /** Whether the composer is currently disabled (read-only, etc.). */
+  disabled?: boolean;
   disabledRef: React.MutableRefObject<boolean>;
   isSendingRef: React.MutableRefObject<boolean>;
   isUploadingRef: React.MutableRefObject<boolean>;
@@ -23,6 +25,7 @@ interface UseComposerDictationOptions {
  */
 export function useComposerDictation({
   syncContentRef,
+  disabled = false,
   disabledRef,
   isSendingRef,
   isUploadingRef,
@@ -58,6 +61,15 @@ export function useComposerDictation({
   useEffect(() => {
     dictation.stopRecording();
   }, [draftKey]);
+
+  // Auto-stop dictation when the composer becomes disabled mid-recording
+  // (e.g. channel becomes read-only, parent send state disables thread composer).
+  // Without this, the WebRTC session keeps running with no way to stop it.
+  useEffect(() => {
+    if (disabled && dictation.isRecording) {
+      dictation.stopRecording();
+    }
+  }, [disabled, dictation.isRecording, dictation.stopRecording]);
 
   return dictation;
 }

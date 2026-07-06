@@ -60,14 +60,19 @@ pub async fn transcribe_status(
 
 /// `POST /transcribe/session` — create an ephemeral OpenAI Realtime session.
 ///
-/// Requires NIP-98 auth. Returns a short-lived client secret that the frontend
-/// uses to establish a WebRTC connection directly with OpenAI for real-time
-/// transcription.
+/// Requires NIP-98 auth **and** relay membership (even on open relays).
+/// Each session mints a metered OpenAI Realtime connection on the relay
+/// operator's bill, so we require the caller to be an actual relay member
+/// regardless of `BUZZ_REQUIRE_RELAY_MEMBERSHIP`.
 pub async fn create_transcribe_session(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<TranscribeSession>, (StatusCode, Json<Value>)> {
     let pubkey = authenticate(&state, &headers, "/transcribe/session", "POST").await?;
+
+    // Hard membership gate — billable endpoint requires actual relay membership
+    // even on open relays where `enforce_relay_membership` would short-circuit.
+    require_relay_member(&state, &headers, &pubkey).await?;
 
     // Per-pubkey rate limit — each session mints a metered OpenAI Realtime
     // connection on the operator's bill.
@@ -198,6 +203,78 @@ async fn authenticate(
     .await?;
 
     Ok(pubkey)
+}
+
+/// Hard relay-membership check for billable endpoints.
+///
+/// Unlike `enforce_relay_membership` (which short-circuits on open relays),
+/// this always verifies that the pubkey is an actual relay member or is
+/// delegated via NIP-OA by a member. This prevents arbitrary NIP-98 signers
+/// from minting metered sessions on the operator's bill.
+async fn require_relay_member(
+    state: &AppState,
+    headers: &HeaderMap,
+    pubkey: &nostr::PublicKey,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    // If the relay already requires membership globally, the `authenticate`
+    // call above handled it — no need to double-check.
+    if state.config.require_relay_membership {
+        return Ok(());
+    }
+
+    // On open relays we still require membership for this billable endpoint.
+    let raw_host = headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let tenant = crate::tenant::bind_community(&state.db, raw_host)
+        .await
+        .map_err(|_| {
+            api_error(
+                StatusCode::NOT_FOUND,
+                "relay: no community is configured for this host",
+            )
+        })?;
+
+    let pubkey_hex = pubkey.to_hex();
+    let is_member = state
+        .db
+        .is_relay_member(tenant.community(), &pubkey_hex)
+        .await
+        .map_err(|e| {
+            tracing::error!("transcribe membership check failed: {e}");
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, "membership check failed")
+        })?;
+
+    if is_member {
+        return Ok(());
+    }
+
+    // NIP-OA fallback: check if the agent's owner is a member.
+    if state.config.allow_nip_oa_auth {
+        let auth_tag = headers.get("x-auth-tag").and_then(|v| v.to_str().ok());
+        if let Some(owner) =
+            super::relay_members::extract_nip_oa_owner(&pubkey.to_bytes(), auth_tag)
+        {
+            let owner_hex = owner.to_hex();
+            let owner_is_member = state
+                .db
+                .is_relay_member(tenant.community(), &owner_hex)
+                .await
+                .map_err(|e| {
+                    tracing::error!("transcribe owner membership check failed: {e}");
+                    api_error(StatusCode::INTERNAL_SERVER_ERROR, "membership check failed")
+                })?;
+            if owner_is_member {
+                return Ok(());
+            }
+        }
+    }
+
+    Err(api_error(
+        StatusCode::FORBIDDEN,
+        "relay membership required for transcription sessions",
+    ))
 }
 
 /// Per-pubkey sliding-window rate limiter for transcription session minting.
