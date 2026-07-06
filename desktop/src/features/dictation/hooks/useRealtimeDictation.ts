@@ -104,29 +104,36 @@ export function useRealtimeDictation({
 
   useEffect(() => cleanupResources, [cleanupResources]);
 
-  const handleRealtimeEvent = useCallback((event: TranscriptEvent) => {
-    if (event.type === "error") {
-      console.error("OpenAI realtime server error", event);
-      toast.error(event.error?.message ?? "Voice input error");
-      return;
-    }
+  const handleRealtimeEvent = useCallback(
+    (runId: number, event: TranscriptEvent) => {
+      // Ignore events from a stale run (e.g. user sent/stopped while
+      // transcripts were still in-flight from the data channel).
+      if (activeRunIdRef.current !== runId) return;
 
-    if (
-      event.type !== TRANSCRIPT_DELTA_EVENT &&
-      event.type !== TRANSCRIPT_COMPLETED_EVENT &&
-      event.type !== BUFFER_COMMITTED_EVENT
-    ) {
-      return;
-    }
+      if (event.type === "error") {
+        console.error("OpenAI realtime server error", event);
+        toast.error(event.error?.message ?? "Voice input error");
+        return;
+      }
 
-    const prevText = getTranscriptText(segmentStateRef.current);
-    const merged = mergeTranscriptEvent(segmentStateRef.current, event);
+      if (
+        event.type !== TRANSCRIPT_DELTA_EVENT &&
+        event.type !== TRANSCRIPT_COMPLETED_EVENT &&
+        event.type !== BUFFER_COMMITTED_EVENT
+      ) {
+        return;
+      }
 
-    if (merged === prevText) return;
+      const prevText = getTranscriptText(segmentStateRef.current);
+      const merged = mergeTranscriptEvent(segmentStateRef.current, event);
 
-    onTranscriptTextRef.current(merged);
-    setIsTranscribing(event.type !== TRANSCRIPT_COMPLETED_EVENT);
-  }, []);
+      if (merged === prevText) return;
+
+      onTranscriptTextRef.current(merged);
+      setIsTranscribing(event.type !== TRANSCRIPT_COMPLETED_EVENT);
+    },
+    [],
+  );
 
   const startRecording = useCallback(async () => {
     if (!isEnabled || isStarting || isRecording) return;
@@ -187,7 +194,7 @@ export function useRealtimeDictation({
       dataChannelRef.current = dataChannel;
       dataChannel.addEventListener("message", (message) => {
         try {
-          handleRealtimeEvent(JSON.parse(String(message.data)));
+          handleRealtimeEvent(runId, JSON.parse(String(message.data)));
         } catch {
           // Ignore non-JSON events
         }
