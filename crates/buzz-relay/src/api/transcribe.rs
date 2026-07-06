@@ -182,12 +182,11 @@ async fn authenticate(
         })?;
 
     let url = super::bridge::nip98_expected_url(&state.config.relay_url, &tenant, path);
+    // Always require NIP-98 signed auth for transcribe endpoints — these mint
+    // billable OpenAI sessions, so we cannot trust the unauthenticated X-Pubkey
+    // dev fallback (which is spoofable) regardless of BUZZ_REQUIRE_AUTH_TOKEN.
     let (pubkey, event_id_bytes) = super::bridge::verify_bridge_auth(
-        headers,
-        method,
-        &url,
-        None,
-        state.config.require_auth_token,
+        headers, method, &url, None, true, // force NIP-98 — billable endpoint
     )?;
     super::bridge::check_nip98_replay(state, &tenant, event_id_bytes).await?;
 

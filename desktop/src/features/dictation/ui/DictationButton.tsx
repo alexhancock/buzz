@@ -28,11 +28,13 @@ export function DictationButton({
       ? "Transcribing…"
       : "Dictate message";
 
-  // Allow the stop action even when the composer is disabled — the user must
-  // always be able to stop an active recording session. Only block *starting*
-  // a new recording when disabled.
-  const isDisabled =
-    dictation.isStarting || (disabled && !dictation.isRecording);
+  // Allow the stop action whenever the mic is live (isRecording), even if
+  // the session setup is still in progress (isStarting) or the composer is
+  // disabled. Only block the button when idle + disabled, or when startup
+  // hasn't captured the mic yet (isStarting && !isRecording).
+  const isDisabled = dictation.isRecording
+    ? false
+    : disabled || dictation.isStarting;
 
   return (
     <Tooltip>
