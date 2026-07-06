@@ -1,4 +1,4 @@
-import { proxySdpExchange } from "../api/transcribeSession";
+import { transcribeConnect } from "../api/transcribeSession";
 import {
   REALTIME_BUFFER_PROCESSOR_NAME,
   createWorkletBlobUrl,
@@ -28,28 +28,28 @@ export function createPeerConnection(): RTCPeerConnection {
 }
 
 /**
- * Complete the WebRTC SDP exchange via the relay proxy.
+ * Complete the WebRTC SDP exchange via the relay.
  *
- * The relay holds the OpenAI client secret server-side — the desktop client
- * sends its SDP offer to the relay, which forwards it to OpenAI and returns
- * the SDP answer. This prevents the client from ever seeing the bearer token.
+ * The relay mints the OpenAI session and proxies the SDP exchange in a single
+ * request — the client never sees the bearer token, and no server-side session
+ * state is needed between requests (works across HA relay replicas).
+ *
+ * Returns the model name from the relay so the caller can configure VAD mode.
  */
 export async function connectPeerConnection(options: {
   peerConnection: RTCPeerConnection;
-  sessionId: string;
-}): Promise<void> {
+}): Promise<{ model: string }> {
   const offer = await options.peerConnection.createOffer();
   await options.peerConnection.setLocalDescription(offer);
 
-  const { sdp: answerSdp } = await proxySdpExchange(
-    options.sessionId,
-    offer.sdp ?? "",
-  );
+  const { sdp: answerSdp, model } = await transcribeConnect(offer.sdp ?? "");
 
   await options.peerConnection.setRemoteDescription({
     type: "answer",
     sdp: answerSdp,
   });
+
+  return { model };
 }
 
 /**

@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import {
-  createTranscribeSession,
-  getTranscribeStatus,
-} from "../api/transcribeSession";
+import { getTranscribeStatus } from "../api/transcribeSession";
 import {
   type AudioBufferCapture,
   type TranscriptEvent,
@@ -199,10 +196,13 @@ export function useRealtimeDictation({
       const prevText = getTranscriptText(segmentStateRef.current);
       const merged = mergeTranscriptEvent(segmentStateRef.current, event);
 
-      if (merged === prevText) return;
+      // Always update transcribing state — a completed event must clear the
+      // indicator even when the final text matches the accumulated deltas.
+      const stillTranscribing = event.type !== TRANSCRIPT_COMPLETED_EVENT;
+      setIsTranscribing(stillTranscribing);
 
+      if (merged === prevText) return;
       onTranscriptTextRef.current(merged);
-      setIsTranscribing(event.type !== TRANSCRIPT_COMPLETED_EVENT);
     },
     [],
   );
@@ -247,15 +247,7 @@ export function useRealtimeDictation({
       }
       audioCaptureRef.current = audioCapture;
 
-      // 3. Create session via relay
-      const session = await createTranscribeSession();
-      if (isStaleRun()) {
-        closeResources({ audioCapture, stream });
-        return;
-      }
-      manualCommitRef.current = requiresManualCommit(session.model);
-
-      // 4. Set up WebRTC
+      // 3. Set up WebRTC peer connection
       peerConnection = createPeerConnection();
       peerConnectionRef.current = peerConnection;
       const activeStream = stream;
@@ -276,23 +268,14 @@ export function useRealtimeDictation({
       // Flush buffered audio once data channel opens
       const channelToFlush = dataChannel;
       const captureToFlush = audioCapture;
-      const useManualCommit = manualCommitRef.current;
       dataChannel.addEventListener("open", () => {
-        // If the user stopped (or restarted) recording between the SDP
-        // exchange and the channel opening, drop this run's buffered audio.
         if (isStaleRun()) {
           captureToFlush.close();
           return;
         }
         flushAudioBuffer(channelToFlush, captureToFlush.chunks);
-        // For manual-commit models, commit the initial buffered audio and
-        // start a periodic commit interval so streaming transcripts flow
-        // during recording (server VAD models commit automatically).
-        if (useManualCommit) {
+        if (manualCommitRef.current) {
           commitAudioBuffer(channelToFlush);
-          // Commit every 2s to produce streaming transcript segments while
-          // the user is still speaking. Each commit triggers a transcription
-          // of the audio accumulated since the last commit.
           commitIntervalRef.current = setInterval(() => {
             if (channelToFlush.readyState === "open") {
               commitAudioBuffer(channelToFlush);
@@ -303,16 +286,14 @@ export function useRealtimeDictation({
         audioCaptureRef.current = null;
       });
 
-      // 5. SDP exchange (proxied through the relay — client never sees the
-      // OpenAI bearer token)
-      await connectPeerConnection({
-        peerConnection,
-        sessionId: session.sessionId,
-      });
+      // 4. Session creation + SDP exchange in a single relay round-trip.
+      // No cross-replica state needed — works in HA deployments.
+      const { model } = await connectPeerConnection({ peerConnection });
       if (isStaleRun()) {
         closeResources({ audioCapture, dataChannel, peerConnection, stream });
         return;
       }
+      manualCommitRef.current = requiresManualCommit(model);
     } catch (error) {
       closeResources({ audioCapture, dataChannel, peerConnection, stream });
       if (!isStaleRun()) {

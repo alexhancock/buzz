@@ -5,13 +5,9 @@ export interface TranscribeStatus {
   model: string;
 }
 
-export interface TranscribeSession {
-  sessionId: string;
-  model: string;
-}
-
-export interface SdpExchangeResponse {
+export interface TranscribeConnectResponse {
   sdp: string;
+  model: string;
 }
 
 /** NIP-98 event kind for HTTP request authorization. */
@@ -53,46 +49,28 @@ export async function getTranscribeStatus(): Promise<TranscribeStatus> {
   return response.json();
 }
 
-export async function createTranscribeSession(): Promise<TranscribeSession> {
-  const baseUrl = await getRelayHttpUrl();
-  const url = `${baseUrl}/transcribe/session`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: await nip98AuthHeader(url, "POST"),
-    },
-  });
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(
-      `Failed to create transcribe session (${response.status}): ${body}`,
-    );
-  }
-  return response.json();
-}
-
 /**
- * Proxy the WebRTC SDP exchange through the relay. The relay holds the
- * OpenAI client secret server-side — the desktop client never sees it.
+ * Mint an OpenAI Realtime session and complete the WebRTC SDP exchange in a
+ * single relay round-trip. The relay holds the OpenAI bearer token server-side
+ * — the client never sees it. This also works correctly across multiple relay
+ * replicas since no server-side session state is needed between requests.
  */
-export async function proxySdpExchange(
-  sessionId: string,
+export async function transcribeConnect(
   sdp: string,
-): Promise<SdpExchangeResponse> {
+): Promise<TranscribeConnectResponse> {
   const baseUrl = await getRelayHttpUrl();
-  const url = `${baseUrl}/transcribe/sdp`;
+  const url = `${baseUrl}/transcribe/connect`;
   const response = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: await nip98AuthHeader(url, "POST"),
     },
-    body: JSON.stringify({ sessionId, sdp }),
+    body: JSON.stringify({ sdp }),
   });
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    throw new Error(`SDP exchange failed (${response.status}): ${body}`);
+    throw new Error(`Transcribe connect failed (${response.status}): ${body}`);
   }
   return response.json();
 }
