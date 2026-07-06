@@ -161,6 +161,7 @@ export function AgentModelField({
 
 export function AgentProviderField({
   disabled,
+  globalProvider,
   isCustomProviderEditing,
   isRequired,
   onProviderChange,
@@ -168,6 +169,7 @@ export function AgentProviderField({
   selectedRuntime,
 }: {
   disabled: boolean;
+  globalProvider?: string;
   isCustomProviderEditing: boolean;
   isRequired: boolean;
   onProviderChange: (value: string) => void;
@@ -178,6 +180,7 @@ export function AgentProviderField({
   const providerOptions = getPersonaProviderOptions(
     trimmedProvider,
     selectedRuntime?.id ?? "",
+    globalProvider,
   );
   const providerSelectValue = isCustomProviderEditing
     ? CUSTOM_PROVIDER_DROPDOWN_VALUE
