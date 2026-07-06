@@ -267,6 +267,7 @@ function MessageComposerImpl({
   const submitMessageRef = React.useRef<() => void>(() => {});
   const setEditorContentRef = React.useRef<(text: string) => void>(() => {});
   const stopDictationRef = React.useRef<() => void>(() => {});
+  const composerScrollRef = React.useRef<HTMLDivElement>(null);
   const dictation = useComposerDictation({
     syncContentRef: syncContentRefFromEditorRef,
     disabled,
@@ -277,10 +278,9 @@ function MessageComposerImpl({
     setEditorContentRef,
     submitMessageRef,
     draftKey: effectiveDraftKey,
+    composerRef: composerScrollRef,
   });
   stopDictationRef.current = dictation.cancelRecording;
-
-  const composerScrollRef = React.useRef<HTMLDivElement>(null);
   // Set after `useLinkEditor` exists below; the editor's link-click handler
   // delegates through this ref to break the hook ordering cycle (the editor
   // needs `onEditLink`, but the link editor needs the editor's `richText`).

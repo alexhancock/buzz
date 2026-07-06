@@ -120,13 +120,6 @@ pub struct Config {
     pub media_max_concurrent_uploads_per_pubkey: u32,
     /// Maximum media upload starts accepted from one pubkey per minute.
     pub media_uploads_per_minute: u32,
-    /// Maximum transcription sessions one pubkey can mint per minute.
-    /// Each session opens a metered OpenAI Realtime connection on the operator's
-    /// bill, so this bounds cost exposure from a single member.
-    pub transcribe_sessions_per_minute: u32,
-    /// Transcription model to use (default: whisper-1).
-    pub transcription_model: String,
-
     /// Optional override for ephemeral channel TTL (in seconds).
     /// When set, any channel created with a TTL tag will use this value instead
     /// of the client-provided one. Useful for testing ephemeral expiry quickly.
@@ -157,11 +150,6 @@ pub struct Config {
     /// HMAC secret for git pre-receive hook callbacks.
     /// Used to authenticate internal policy endpoint requests.
     pub git_hook_hmac_secret: String,
-
-    /// Optional OpenAI API key for real-time transcription (dictation).
-    /// When absent, the `/transcribe/session` endpoint returns 503 and the
-    /// desktop mic button stays hidden.
-    pub openai_api_key: Option<String>,
 
     /// Optional path to the web UI `dist/` directory.
     /// When set, the relay serves the SPA from this directory for browser requests.
@@ -353,17 +341,6 @@ impl Config {
             .filter(|&v| v > 0)
             .unwrap_or(30);
 
-        let transcribe_sessions_per_minute: u32 =
-            std::env::var("BUZZ_TRANSCRIBE_SESSIONS_PER_MINUTE")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .filter(|&v| v > 0)
-                .unwrap_or(5);
-        let transcription_model: String = std::env::var("BUZZ_TRANSCRIPTION_MODEL")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "whisper-1".to_string());
-
         let ephemeral_ttl_override = std::env::var("BUZZ_EPHEMERAL_TTL_OVERRIDE")
             .ok()
             .and_then(|v| v.parse::<i32>().ok())
@@ -402,11 +379,6 @@ impl Config {
                 let secret: [u8; 32] = rand::random();
                 hex::encode(secret)
             });
-        let openai_api_key = std::env::var("BUZZ_OPENAI_API_KEY")
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-
         // Web UI static file serving
         let web_dir = std::env::var("BUZZ_WEB_DIR")
             .ok()
@@ -460,8 +432,6 @@ impl Config {
             media_max_concurrent_uploads,
             media_max_concurrent_uploads_per_pubkey,
             media_uploads_per_minute,
-            transcribe_sessions_per_minute,
-            transcription_model,
             ephemeral_ttl_override,
             git_repo_path,
             git_max_pack_bytes,
@@ -469,7 +439,6 @@ impl Config {
             git_max_repos_per_pubkey,
             git_max_concurrent_ops,
             git_hook_hmac_secret,
-            openai_api_key,
             web_dir,
         })
     }

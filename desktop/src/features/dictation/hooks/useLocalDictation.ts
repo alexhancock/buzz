@@ -30,6 +30,17 @@ interface DictationStatus {
 const DICTATION_TRANSCRIPT_EVENT = "dictation-transcript";
 const DICTATION_STATE_EVENT = "dictation-state";
 
+/** Interval (ms) to poll model availability after initial unavailability. */
+const MODEL_POLL_INTERVAL_MS = 5_000;
+
+/**
+ * Batching interval for audio IPC (ms). The worklet posts every render quantum
+ * (~2.67ms at 48kHz/128 samples). Sending each one individually overloads IPC.
+ * We accumulate ~100ms of audio before sending to reduce IPC overhead from
+ * ~375 calls/s to ~10 calls/s.
+ */
+const AUDIO_BATCH_MS = 100;
+
 /**
  * Local STT dictation hook using the Parakeet model via Tauri native commands.
  *
@@ -37,7 +48,8 @@ const DICTATION_STATE_EVENT = "dictation-state";
  * sherpa-onnx Parakeet TDT-CTC 110M model as huddle transcription.
  *
  * Audio capture uses the Web Audio API (AudioWorklet) on the frontend side,
- * then sends raw PCM bytes to the native STT engine via `push_dictation_audio`.
+ * then sends batched raw PCM bytes to the native STT engine via
+ * `push_dictation_audio`.
  */
 export function useLocalDictation({
   disabled = false,
@@ -52,6 +64,8 @@ export function useLocalDictation({
   const streamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const workletRef = useRef<AudioWorkletNode | null>(null);
+  const batchTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const audioBatchRef = useRef<Float32Array[]>([]);
   const unlistenTranscriptRef = useRef<UnlistenFn | null>(null);
   const unlistenStateRef = useRef<UnlistenFn | null>(null);
   const onRecordingStartRef = useRef(onRecordingStart);
@@ -62,22 +76,75 @@ export function useLocalDictation({
 
   const isEnabled = !disabled && isAvailable;
 
-  // Check availability on mount.
+  // Check availability on mount and poll until available (model may be downloading).
   useEffect(() => {
     let cancelled = false;
-    invoke<DictationStatus>("get_dictation_status")
-      .then((status) => {
-        if (!cancelled) setIsAvailable(status.available);
-      })
-      .catch(() => {
-        if (!cancelled) setIsAvailable(false);
-      });
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+    function checkAvailability() {
+      invoke<DictationStatus>("get_dictation_status")
+        .then((status) => {
+          if (cancelled) return;
+          setIsAvailable(status.available);
+          // Stop polling once the model is ready.
+          if (status.available && pollTimer) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setIsAvailable(false);
+        });
+    }
+
+    checkAvailability();
+
+    // Poll periodically until available (handles background model download).
+    pollTimer = setInterval(() => {
+      if (cancelled) return;
+      checkAvailability();
+    }, MODEL_POLL_INTERVAL_MS);
+
     return () => {
       cancelled = true;
+      if (pollTimer) clearInterval(pollTimer);
     };
   }, []);
 
+  /** Flush accumulated audio batch to the native STT engine. */
+  const flushAudioBatch = useCallback(() => {
+    const batch = audioBatchRef.current;
+    if (batch.length === 0) return;
+
+    // Calculate total byte length and merge into a single buffer.
+    let totalSamples = 0;
+    for (const chunk of batch) {
+      totalSamples += chunk.length;
+    }
+    const merged = new Float32Array(totalSamples);
+    let offset = 0;
+    for (const chunk of batch) {
+      merged.set(chunk, offset);
+      offset += chunk.length;
+    }
+    audioBatchRef.current = [];
+
+    const bytes = new Uint8Array(
+      merged.buffer,
+      merged.byteOffset,
+      merged.byteLength,
+    );
+    invokeRawBinary("push_dictation_audio", bytes).catch(() => {});
+  }, []);
+
   const cleanup = useCallback(() => {
+    // Flush any remaining audio before teardown.
+    flushAudioBatch();
+    // Stop batch timer.
+    if (batchTimerRef.current) {
+      clearInterval(batchTimerRef.current);
+      batchTimerRef.current = null;
+    }
     // Stop mic.
     if (streamRef.current) {
       for (const track of streamRef.current.getTracks()) {
@@ -104,7 +171,7 @@ export function useLocalDictation({
       unlistenStateRef.current();
       unlistenStateRef.current = null;
     }
-  }, []);
+  }, [flushAudioBatch]);
 
   // Cleanup on unmount.
   useEffect(() => cleanup, [cleanup]);
@@ -164,13 +231,14 @@ export function useLocalDictation({
       const audioContext = new AudioContext({ sampleRate: 48000 });
       audioContextRef.current = audioContext;
 
-      // Create a simple processor that sends raw f32 PCM to the native side.
+      // Create a processor that accumulates audio frames and posts them
+      // to the main thread. Batching happens on the main thread side via
+      // a timer to reduce IPC overhead.
       const processorCode = `
         class DictationProcessor extends AudioWorkletProcessor {
           process(inputs) {
             const input = inputs[0];
             if (input && input[0] && input[0].length > 0) {
-              // Send f32 samples as raw bytes.
               this.port.postMessage(input[0].buffer);
             }
             return true;
@@ -192,23 +260,24 @@ export function useLocalDictation({
       const worklet = new AudioWorkletNode(audioContext, "dictation-processor");
       workletRef.current = worklet;
 
-      // Forward PCM bytes to the native STT engine via raw binary IPC.
+      // Accumulate audio frames in a batch array; a timer flushes to native.
       worklet.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
-        const float32 = new Float32Array(event.data);
-        const bytes = new Uint8Array(
-          float32.buffer,
-          float32.byteOffset,
-          float32.byteLength,
-        );
-        invokeRawBinary("push_dictation_audio", bytes).catch(() => {});
+        audioBatchRef.current.push(new Float32Array(event.data));
       };
 
+      // Start the batch flush timer (~10 IPC calls/s instead of ~375).
+      batchTimerRef.current = setInterval(flushAudioBatch, AUDIO_BATCH_MS);
+
       source.connect(worklet);
-      worklet.connect(audioContext.destination);
+      // Don't connect to destination — we only capture, not play back.
+      worklet.connect(audioContext.createGain()); // keep worklet alive without audible output
 
       setIsRecording(true);
       setIsTranscribing(true);
     } catch (error) {
+      // Stop the native engine if it was started but a later step failed
+      // (e.g. mic permission denied, AudioWorklet setup error).
+      invoke("stop_dictation").catch(() => {});
       cleanup();
       setIsRecording(false);
       setIsTranscribing(false);
@@ -235,9 +304,16 @@ export function useLocalDictation({
     } finally {
       setIsStarting(false);
     }
-  }, [cleanup, isEnabled, isRecording, isStarting]);
+  }, [cleanup, flushAudioBatch, isEnabled, isRecording, isStarting]);
 
   const stopRecording = useCallback(() => {
+    // Flush remaining audio so the native engine can transcribe the tail.
+    flushAudioBatch();
+    // Stop batch timer.
+    if (batchTimerRef.current) {
+      clearInterval(batchTimerRef.current);
+      batchTimerRef.current = null;
+    }
     // Stop mic and audio pipeline immediately so the user gets visual feedback,
     // but keep isTranscribing=true until the native `stopped` event arrives
     // (which fires only after the final transcript has been forwarded).
@@ -258,7 +334,7 @@ export function useLocalDictation({
     invoke("stop_dictation").catch(() => {});
     setIsRecording(false);
     // isTranscribing stays true — cleared when `dictation-state: stopped` arrives.
-  }, []);
+  }, [flushAudioBatch]);
 
   const cancelRecording = useCallback(() => {
     cleanup();

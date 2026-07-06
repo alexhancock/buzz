@@ -62,15 +62,6 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/count", post(api::bridge::count_events))
         // Webhook trigger (secret-authenticated, no NIP-98)
         .route("/hooks/{id}", post(api::bridge::workflow_webhook))
-        // Transcription (dictation) — proxies OpenAI Realtime client-secret minting
-        .route(
-            "/transcribe/status",
-            get(api::transcribe::transcribe_status),
-        )
-        .route(
-            "/transcribe/connect",
-            post(api::transcribe::transcribe_connect),
-        )
         // Huddle audio WebSocket route
         .route(
             "/huddle/{channel_id}/audio",
@@ -102,7 +93,6 @@ pub fn build_router(state: Arc<AppState>) -> Router {
                         || path.starts_with("/internal/")
                         || path.starts_with("/.well-known/")
                         || path.starts_with("/huddle/")
-                        || path.starts_with("/transcribe/")
                         || path == "/health"
                         || path == "/_liveness"
                         || path == "/_readiness"

@@ -25,7 +25,7 @@ use super::{api_error, internal_error, not_found};
 ///
 /// Returns the authenticated public key and an event ID for replay detection.
 /// For X-Pubkey dev mode, the event ID is a zero hash (no replay concern).
-pub(crate) fn verify_bridge_auth(
+fn verify_bridge_auth(
     headers: &HeaderMap,
     method: &str,
     url: &str,
@@ -76,7 +76,7 @@ pub(crate) fn verify_bridge_auth(
 /// `AppState`, not process-local memory. Any Redis/guard error fails closed:
 /// without the shared `SET NX EX` proof, a stateless worker cannot admit the
 /// NIP-98 request safely.
-pub(crate) async fn check_nip98_replay(
+async fn check_nip98_replay(
     state: &AppState,
     tenant: &TenantContext,
     event_id_bytes: [u8; 32],
@@ -135,11 +135,7 @@ async fn check_nip98_replay_with_guard(
 /// pass and the relay would proceed against the wrong tenant's auth context),
 /// and (b) reject every legitimate request whose community host isn't the
 /// single configured one. Substituting `tenant.host()` closes both directions.
-pub(crate) fn nip98_expected_url(
-    config_relay_url: &str,
-    tenant: &TenantContext,
-    path: &str,
-) -> String {
+fn nip98_expected_url(config_relay_url: &str, tenant: &TenantContext, path: &str) -> String {
     let scheme = if config_relay_url.trim_start().starts_with("wss://") {
         "https"
     } else {
