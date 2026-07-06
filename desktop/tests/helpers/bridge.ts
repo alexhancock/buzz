@@ -206,6 +206,16 @@ type MockBridgeOptions = {
    * can exercise the "Thread deleted" label / disabled-send path.
    */
   deletedEventIds?: string[];
+  /**
+   * Global agent config returned by `get_global_agent_config`. Defaults to
+   * an empty config (no provider, model, or env vars) if not specified.
+   * Pass a config with a provider to test Inherit-from-global behavior.
+   */
+  globalAgentConfig?: {
+    env_vars: Record<string, string>;
+    provider: string | null;
+    model: string | null;
+  };
 };
 
 type BridgeOptions = {

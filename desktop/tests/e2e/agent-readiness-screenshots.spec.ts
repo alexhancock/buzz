@@ -108,9 +108,9 @@ test.describe("agent readiness gate screenshots", () => {
       timeout: 10_000,
     });
 
-    // Provider empty → required marker shown; submit is now ENABLED.
-    // Wait up to 10 s for prereqsQuery to resolve (async even in mock env).
-    await expect(page.getByTestId("create-agent-submit")).toBeEnabled({
+    // Provider empty + no global provider → save is BLOCKED per the
+    // provider-default rule. The submit button must be disabled.
+    await expect(page.getByTestId("create-agent-submit")).toBeDisabled({
       timeout: 10_000,
     });
     await settleAnimations(page);
@@ -270,7 +270,7 @@ test.describe("agent readiness gate screenshots", () => {
     });
   });
 
-  // Shot 08: goose runtime, provider empty → required marker shown, save allowed (same as buzz-agent).
+  // Shot 08: goose runtime, provider empty + no global → save BLOCKED (same rule as buzz-agent).
   test("08-create-goose-empty-provider-marker", async ({ page }) => {
     await installMockBridge(page);
     await openCreateDialog(page);
@@ -286,8 +286,9 @@ test.describe("agent readiness gate screenshots", () => {
     await expect(page.locator("#agent-provider")).toBeVisible({
       timeout: 5_000,
     });
-    // Required marker shown; submit is now ENABLED.
-    await expect(page.getByTestId("create-agent-submit")).toBeEnabled({
+    // Provider empty + no global provider → save is BLOCKED per the
+    // provider-default rule. The submit button must be disabled.
+    await expect(page.getByTestId("create-agent-submit")).toBeDisabled({
       timeout: 10_000,
     });
     await settleAnimations(page);

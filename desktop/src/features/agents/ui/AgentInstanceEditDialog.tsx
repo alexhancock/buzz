@@ -990,7 +990,9 @@ export function AgentInstanceEditDialog({
                       envVars={envVars}
                       fileSatisfiedEnvKeys={fileSatisfiedEnvKeys}
                       focusKey={
-                        initialFocus?.type === "env_key" ? initialFocus.key : undefined
+                        initialFocus?.type === "env_key"
+                          ? initialFocus.key
+                          : undefined
                       }
                       inheritedEnvVars={inheritedWithGlobal}
                       inheritHarness={inheritHarness}
