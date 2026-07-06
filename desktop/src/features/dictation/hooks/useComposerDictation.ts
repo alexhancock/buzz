@@ -89,9 +89,15 @@ export function useComposerDictation({
 
   // Cancel dictation when the channel/thread changes so that transcript events
   // from a stale local STT session don't leak into the wrong draft.
+  // Only cancel if this instance is actually recording — avoids killing another
+  // composer's session since the native engine is a singleton.
+  const isRecordingRef = useRef(false);
+  isRecordingRef.current = dictation.isRecording || dictation.isStarting;
   // biome-ignore lint/correctness/useExhaustiveDependencies: draftKey is the sole trigger
   useEffect(() => {
-    dictation.cancelRecording();
+    if (isRecordingRef.current) {
+      dictation.cancelRecording();
+    }
   }, [draftKey]);
 
   // Auto-cancel dictation when the composer becomes disabled mid-recording

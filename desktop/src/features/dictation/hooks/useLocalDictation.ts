@@ -111,10 +111,11 @@ export function useLocalDictation({
     };
   }, []);
 
-  /** Flush accumulated audio batch to the native STT engine. */
-  const flushAudioBatch = useCallback(() => {
+  /** Flush accumulated audio batch to the native STT engine. Returns a promise
+   *  that resolves once the IPC call completes (or immediately if nothing to flush). */
+  const flushAudioBatch = useCallback((): Promise<void> => {
     const batch = audioBatchRef.current;
-    if (batch.length === 0) return;
+    if (batch.length === 0) return Promise.resolve();
 
     // Calculate total byte length and merge into a single buffer.
     let totalSamples = 0;
@@ -134,12 +135,16 @@ export function useLocalDictation({
       merged.byteOffset,
       merged.byteLength,
     );
-    invokeRawBinary("push_dictation_audio", bytes).catch(() => {});
+    return invokeRawBinary("push_dictation_audio", bytes)
+      .then(() => {})
+      .catch(() => {});
   }, []);
 
   const cleanup = useCallback(() => {
-    // Flush any remaining audio before teardown.
-    flushAudioBatch();
+    // Flush any remaining audio before teardown, then stop the native engine.
+    void flushAudioBatch().then(() => {
+      invoke("stop_dictation").catch(() => {});
+    });
     // Stop batch timer.
     if (batchTimerRef.current) {
       clearInterval(batchTimerRef.current);
@@ -307,16 +312,12 @@ export function useLocalDictation({
   }, [cleanup, flushAudioBatch, isEnabled, isRecording, isStarting]);
 
   const stopRecording = useCallback(() => {
-    // Flush remaining audio so the native engine can transcribe the tail.
-    flushAudioBatch();
-    // Stop batch timer.
+    // Stop batch timer immediately.
     if (batchTimerRef.current) {
       clearInterval(batchTimerRef.current);
       batchTimerRef.current = null;
     }
-    // Stop mic and audio pipeline immediately so the user gets visual feedback,
-    // but keep isTranscribing=true until the native `stopped` event arrives
-    // (which fires only after the final transcript has been forwarded).
+    // Stop mic and audio pipeline immediately so the user gets visual feedback.
     if (streamRef.current) {
       for (const track of streamRef.current.getTracks()) {
         track.stop();
@@ -331,9 +332,13 @@ export function useLocalDictation({
       void audioContextRef.current.close();
       audioContextRef.current = null;
     }
-    invoke("stop_dictation").catch(() => {});
     setIsRecording(false);
+    // Flush remaining audio and THEN stop the native engine, ensuring the
+    // final batch arrives before the engine shuts down and flushes its buffer.
     // isTranscribing stays true — cleared when `dictation-state: stopped` arrives.
+    void flushAudioBatch().then(() => {
+      invoke("stop_dictation").catch(() => {});
+    });
   }, [flushAudioBatch]);
 
   const cancelRecording = useCallback(() => {
