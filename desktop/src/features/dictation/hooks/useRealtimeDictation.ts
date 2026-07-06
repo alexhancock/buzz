@@ -303,10 +303,11 @@ export function useRealtimeDictation({
         audioCaptureRef.current = null;
       });
 
-      // 5. SDP exchange
+      // 5. SDP exchange (proxied through the relay — client never sees the
+      // OpenAI bearer token)
       await connectPeerConnection({
         peerConnection,
-        clientSecret: session.clientSecret,
+        sessionId: session.sessionId,
       });
       if (isStaleRun()) {
         closeResources({ audioCapture, dataChannel, peerConnection, stream });

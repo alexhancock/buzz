@@ -1,10 +1,12 @@
-//! Transcription session endpoint — proxies OpenAI Realtime API client-secret minting.
+//! Transcription session endpoint — proxies OpenAI Realtime API session + SDP exchange.
 //!
-//! When `BUZZ_OPENAI_API_KEY` is configured, the relay can mint ephemeral client
-//! secrets for the OpenAI Realtime API. The desktop app uses these to establish a
-//! WebRTC connection for real-time speech-to-text dictation.
+//! When `BUZZ_OPENAI_API_KEY` is configured, the relay mints ephemeral OpenAI
+//! Realtime sessions and proxies the WebRTC SDP exchange on behalf of the
+//! desktop client. The client never receives the raw OpenAI bearer token —
+//! this prevents a compromised client from reusing the token to open
+//! non-transcription sessions under the operator's account.
 //!
-//! Both endpoints require NIP-98 auth (same as `/events`, `/query`, `/count`).
+//! All endpoints require NIP-98 auth (same as `/events`, `/query`, `/count`).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -14,8 +16,9 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::Json,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use uuid::Uuid;
 
 use crate::state::AppState;
 
@@ -23,6 +26,12 @@ use super::api_error;
 
 const OPENAI_REALTIME_CLIENT_SECRETS_URL: &str =
     "https://api.openai.com/v1/realtime/client_secrets";
+
+const OPENAI_REALTIME_CALLS_URL: &str = "https://api.openai.com/v1/realtime/calls";
+
+/// Maximum age of a cached transcription session secret before it's considered
+/// expired. Matches the `expires_after.seconds` sent to OpenAI.
+const SESSION_SECRET_TTL: Duration = Duration::from_secs(60);
 
 /// Rate-limit window for transcription session minting.
 const TRANSCRIBE_RATE_WINDOW: Duration = Duration::from_secs(60);
@@ -38,8 +47,22 @@ pub struct TranscribeStatus {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscribeSession {
-    client_secret: String,
+    session_id: String,
     model: String,
+}
+
+/// Request body for `POST /transcribe/sdp`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SdpExchangeRequest {
+    session_id: String,
+    sdp: String,
+}
+
+/// Response for `POST /transcribe/sdp`.
+#[derive(Serialize)]
+pub struct SdpExchangeResponse {
+    sdp: String,
 }
 
 /// `GET /transcribe/status` — check if transcription is configured.
@@ -158,10 +181,87 @@ pub async fn create_transcribe_session(
         )
     })?;
 
-    Ok(Json(TranscribeSession {
-        client_secret,
-        model,
-    }))
+    // Store the secret server-side — the client receives only an opaque session
+    // ID and must call `/transcribe/sdp` to complete the WebRTC handshake.
+    let session_id = Uuid::new_v4().to_string();
+    state
+        .transcribe_sessions
+        .insert(session_id.clone(), (client_secret, Instant::now()));
+
+    Ok(Json(TranscribeSession { session_id, model }))
+}
+
+/// `POST /transcribe/sdp` — proxy the WebRTC SDP exchange to OpenAI.
+///
+/// Accepts the client's SDP offer and the session ID returned by
+/// `/transcribe/session`. The relay looks up the cached client secret,
+/// forwards the SDP offer to OpenAI's `/v1/realtime/calls` endpoint, and
+/// returns the SDP answer. The client never sees the bearer token.
+pub async fn proxy_sdp_exchange(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<SdpExchangeRequest>,
+) -> Result<Json<SdpExchangeResponse>, (StatusCode, Json<Value>)> {
+    // Authenticate — same NIP-98 requirement as session creation.
+    let pubkey = authenticate(&state, &headers, "/transcribe/sdp", "POST").await?;
+    require_relay_member(&state, &headers, &pubkey).await?;
+
+    // Look up the cached client secret.
+    let (client_secret, created_at) = state
+        .transcribe_sessions
+        .remove(&body.session_id)
+        .map(|(_, v)| v)
+        .ok_or_else(|| {
+            api_error(
+                StatusCode::NOT_FOUND,
+                "transcription session not found or already used",
+            )
+        })?;
+
+    // Reject expired sessions.
+    if created_at.elapsed() > SESSION_SECRET_TTL {
+        return Err(api_error(
+            StatusCode::GONE,
+            "transcription session expired — create a new one",
+        ));
+    }
+
+    // Proxy the SDP offer to OpenAI.
+    let client = openai_client().map_err(|(status, msg)| api_error(status, msg))?;
+    let response = client
+        .post(OPENAI_REALTIME_CALLS_URL)
+        .header("Authorization", format!("Bearer {client_secret}"))
+        .header("Content-Type", "application/sdp")
+        .body(body.sdp)
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!("OpenAI SDP exchange request failed: {e}");
+            api_error(
+                StatusCode::BAD_GATEWAY,
+                "failed to establish transcription connection",
+            )
+        })?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let resp_body = response.text().await.unwrap_or_default();
+        tracing::error!("OpenAI SDP exchange error ({status}): {resp_body}");
+        return Err(api_error(
+            StatusCode::BAD_GATEWAY,
+            "transcription service rejected the connection",
+        ));
+    }
+
+    let sdp_answer = response.text().await.map_err(|e| {
+        tracing::error!("OpenAI SDP answer read error: {e}");
+        api_error(
+            StatusCode::BAD_GATEWAY,
+            "invalid response from transcription service",
+        )
+    })?;
+
+    Ok(Json(SdpExchangeResponse { sdp: sdp_answer }))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

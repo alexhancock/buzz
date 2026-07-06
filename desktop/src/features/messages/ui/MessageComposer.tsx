@@ -279,6 +279,7 @@ function MessageComposerImpl({
     draftKey: effectiveDraftKey,
   });
   stopDictationRef.current = dictation.cancelRecording;
+
   const composerScrollRef = React.useRef<HTMLDivElement>(null);
   // Set after `useLinkEditor` exists below; the editor's link-click handler
   // delegates through this ref to break the hook ordering cycle (the editor
@@ -555,7 +556,7 @@ function MessageComposerImpl({
     // Edit mode
     if (editTargetRef.current && onEditSaveRef.current) {
       if (isSendingRef.current || isUploadingRef.current) return;
-      stopDictationRef.current(); // stop dictation so late transcripts don't refill during edit save
+      stopDictationRef.current(); // cancel dictation before edit save
       const currentPendingImeta = media.pendingImetaRef.current;
       const hasMedia = currentPendingImeta.length > 0;
       // Empty text + zero attachments is a no-op (don't let edit become an
@@ -615,8 +616,7 @@ function MessageComposerImpl({
     ) {
       return;
     }
-
-    stopDictationRef.current(); // stop dictation so late transcripts don't refill
+    stopDictationRef.current(); // cancel dictation; send proceeds with current content
 
     const capturedThreadContext = onCaptureSendContext?.() ?? null;
     // If a thread-reply composer reported no reply target at submit time,

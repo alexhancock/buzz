@@ -1,10 +1,9 @@
+import { proxySdpExchange } from "../api/transcribeSession";
 import {
   REALTIME_BUFFER_PROCESSOR_NAME,
   createWorkletBlobUrl,
 } from "./realtimeBufferWorklet";
 
-export const OPENAI_REALTIME_WEBRTC_URL =
-  "https://api.openai.com/v1/realtime/calls";
 export const TRANSCRIPT_DELTA_EVENT =
   "conversation.item.input_audio_transcription.delta";
 export const TRANSCRIPT_COMPLETED_EVENT =
@@ -28,32 +27,28 @@ export function createPeerConnection(): RTCPeerConnection {
   return new RTCPeerConnection();
 }
 
+/**
+ * Complete the WebRTC SDP exchange via the relay proxy.
+ *
+ * The relay holds the OpenAI client secret server-side — the desktop client
+ * sends its SDP offer to the relay, which forwards it to OpenAI and returns
+ * the SDP answer. This prevents the client from ever seeing the bearer token.
+ */
 export async function connectPeerConnection(options: {
   peerConnection: RTCPeerConnection;
-  clientSecret: string;
+  sessionId: string;
 }): Promise<void> {
   const offer = await options.peerConnection.createOffer();
   await options.peerConnection.setLocalDescription(offer);
 
-  const response = await fetch(OPENAI_REALTIME_WEBRTC_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${options.clientSecret}`,
-      "Content-Type": "application/sdp",
-    },
-    body: offer.sdp ?? "",
-  });
-
-  const body = await response.text();
-  if (!response.ok) {
-    throw new Error(
-      `OpenAI realtime connection failed (${response.status}): ${body}`,
-    );
-  }
+  const { sdp: answerSdp } = await proxySdpExchange(
+    options.sessionId,
+    offer.sdp ?? "",
+  );
 
   await options.peerConnection.setRemoteDescription({
     type: "answer",
-    sdp: body,
+    sdp: answerSdp,
   });
 }
 

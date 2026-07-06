@@ -71,6 +71,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/transcribe/session",
             post(api::transcribe::create_transcribe_session),
         )
+        .route("/transcribe/sdp", post(api::transcribe::proxy_sdp_exchange))
         // Huddle audio WebSocket route
         .route(
             "/huddle/{channel_id}/audio",

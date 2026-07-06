@@ -6,8 +6,12 @@ export interface TranscribeStatus {
 }
 
 export interface TranscribeSession {
-  clientSecret: string;
+  sessionId: string;
   model: string;
+}
+
+export interface SdpExchangeResponse {
+  sdp: string;
 }
 
 /** NIP-98 event kind for HTTP request authorization. */
@@ -64,6 +68,31 @@ export async function createTranscribeSession(): Promise<TranscribeSession> {
     throw new Error(
       `Failed to create transcribe session (${response.status}): ${body}`,
     );
+  }
+  return response.json();
+}
+
+/**
+ * Proxy the WebRTC SDP exchange through the relay. The relay holds the
+ * OpenAI client secret server-side — the desktop client never sees it.
+ */
+export async function proxySdpExchange(
+  sessionId: string,
+  sdp: string,
+): Promise<SdpExchangeResponse> {
+  const baseUrl = await getRelayHttpUrl();
+  const url = `${baseUrl}/transcribe/sdp`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: await nip98AuthHeader(url, "POST"),
+    },
+    body: JSON.stringify({ sessionId, sdp }),
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`SDP exchange failed (${response.status}): ${body}`);
   }
   return response.json();
 }
