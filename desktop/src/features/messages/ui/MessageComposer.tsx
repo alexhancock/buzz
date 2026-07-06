@@ -278,7 +278,7 @@ function MessageComposerImpl({
     submitMessageRef,
     draftKey: effectiveDraftKey,
   });
-  stopDictationRef.current = dictation.stopRecording;
+  stopDictationRef.current = dictation.cancelRecording;
   const composerScrollRef = React.useRef<HTMLDivElement>(null);
   // Set after `useLinkEditor` exists below; the editor's link-click handler
   // delegates through this ref to break the hook ordering cycle (the editor

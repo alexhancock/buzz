@@ -55,21 +55,21 @@ export function useComposerDictation({
     isSendBlockedRef,
   });
 
-  // Stop dictation when the channel/thread changes so that transcript events
+  // Cancel dictation when the channel/thread changes so that transcript events
   // from a stale WebRTC session don't leak into the wrong draft.
   // biome-ignore lint/correctness/useExhaustiveDependencies: draftKey is the sole trigger
   useEffect(() => {
-    dictation.stopRecording();
+    dictation.cancelRecording();
   }, [draftKey]);
 
-  // Auto-stop dictation when the composer becomes disabled mid-recording
+  // Auto-cancel dictation when the composer becomes disabled mid-recording
   // (e.g. channel becomes read-only, parent send state disables thread composer).
   // Without this, the WebRTC session keeps running with no way to stop it.
   useEffect(() => {
     if (disabled && dictation.isRecording) {
-      dictation.stopRecording();
+      dictation.cancelRecording();
     }
-  }, [disabled, dictation.isRecording, dictation.stopRecording]);
+  }, [disabled, dictation.isRecording, dictation.cancelRecording]);
 
   return dictation;
 }

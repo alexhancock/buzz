@@ -85,7 +85,15 @@ export function useRealtimeDictation({
     };
   }, []);
 
-  const cleanupResources = useCallback(() => {
+  /**
+   * Tear down recording resources.
+   *
+   * @param invalidateRun - When true, immediately marks the run stale so
+   *   late transcript events are rejected (used by send/edit-save/navigation).
+   *   When false (user-initiated stop), the run stays valid during the grace
+   *   window so the final commit's transcript is delivered to the composer.
+   */
+  const cleanupResources = useCallback((invalidateRun = true) => {
     // Clear periodic commit interval if active.
     if (commitIntervalRef.current) {
       clearInterval(commitIntervalRef.current);
@@ -102,11 +110,6 @@ export function useRealtimeDictation({
 
     if (needsCommit && dc) {
       commitAudioBuffer(dc);
-      // Mark the run stale immediately so late transcript events from the
-      // data channel are rejected by handleRealtimeEvent. This prevents
-      // transcripts from writing back into the composer after a send,
-      // edit-save, or navigation that triggered this cleanup.
-      activeRunIdRef.current += 1;
       // Stop the mic immediately so no new audio is sent after commit.
       for (const track of streamRef.current?.getTracks() ?? []) {
         track.stop();
@@ -114,12 +117,25 @@ export function useRealtimeDictation({
       streamRef.current = null;
       audioCaptureRef.current?.close();
       audioCaptureRef.current = null;
-      // Delay WebRTC teardown briefly for clean protocol shutdown (the
-      // commit message needs to reach OpenAI before the channel closes).
+      // Delay WebRTC teardown briefly so the commit reaches OpenAI and
+      // the transcript response can arrive.
       const pc = peerConnectionRef.current;
       peerConnectionRef.current = null;
       dataChannelRef.current = null;
+      const runId = activeRunIdRef.current;
+
+      if (invalidateRun) {
+        // Send/navigation: reject all late events immediately.
+        activeRunIdRef.current += 1;
+      }
+      // else: user stop — keep the run valid so the final transcript arrives.
+
       setTimeout(() => {
+        // After the grace window, invalidate if we haven't already (user stop)
+        // or if no new run started (send/navigation case already bumped).
+        if (activeRunIdRef.current === runId) {
+          activeRunIdRef.current += 1;
+        }
         dc.close();
         pc?.close();
       }, 3000);
@@ -139,11 +155,20 @@ export function useRealtimeDictation({
     streamRef.current = null;
   }, []);
 
+  /** Full cleanup — invalidates the run (used by send/navigation). */
   const cleanup = useCallback(() => {
-    cleanupResources();
+    cleanupResources(true);
     setIsRecording(false);
     setIsStarting(false);
     setIsTranscribing(false);
+  }, [cleanupResources]);
+
+  /** User-initiated stop — preserves final transcript for manual-commit models. */
+  const userStop = useCallback(() => {
+    cleanupResources(false);
+    setIsRecording(false);
+    setIsStarting(false);
+    // Note: isTranscribing stays true briefly while the final transcript arrives.
   }, [cleanupResources]);
 
   useEffect(() => cleanupResources, [cleanupResources]);
@@ -314,7 +339,15 @@ export function useRealtimeDictation({
     }
   }, [handleRealtimeEvent, isEnabled, isRecording, isStarting]);
 
-  const stopRecording = useCallback(() => cleanup(), [cleanup]);
+  /** User-initiated stop (mic button) — preserves final transcript. */
+  const stopRecording = useCallback(() => userStop(), [userStop]);
+
+  /**
+   * Cancel recording and reject all pending transcripts. Used by send,
+   * edit-save, and navigation to prevent late events from refilling the
+   * composer after the content has been dispatched.
+   */
+  const cancelRecording = useCallback(() => cleanup(), [cleanup]);
 
   const toggleRecording = useCallback(() => {
     if (isRecording || isStarting) {
@@ -331,6 +364,7 @@ export function useRealtimeDictation({
     isTranscribing,
     startRecording,
     stopRecording,
+    cancelRecording,
     toggleRecording,
   };
 }
