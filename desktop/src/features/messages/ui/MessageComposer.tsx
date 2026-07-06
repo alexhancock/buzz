@@ -555,6 +555,7 @@ function MessageComposerImpl({
     // Edit mode
     if (editTargetRef.current && onEditSaveRef.current) {
       if (isSendingRef.current || isUploadingRef.current) return;
+      stopDictationRef.current(); // stop dictation so late transcripts don't refill during edit save
       const currentPendingImeta = media.pendingImetaRef.current;
       const hasMedia = currentPendingImeta.length > 0;
       // Empty text + zero attachments is a no-op (don't let edit become an

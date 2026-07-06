@@ -89,7 +89,9 @@ pub async fn create_transcribe_session(
 
     let model = state.config.transcription_model.clone();
 
-    let response = openai_client()
+    let client = openai_client().map_err(|(status, msg)| api_error(status, msg))?;
+
+    let response = client
         .post(OPENAI_REALTIME_CLIENT_SECRETS_URL)
         .header("Authorization", format!("Bearer {api_key}"))
         .header("Content-Type", "application/json")
@@ -218,14 +220,25 @@ fn transcribe_rate_limited(state: &AppState, pubkey: &nostr::PublicKey) -> bool 
 }
 
 /// Shared HTTP client for OpenAI requests (connection pooling).
-fn openai_client() -> &'static reqwest::Client {
+fn openai_client() -> Result<&'static reqwest::Client, (StatusCode, &'static str)> {
     static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-    CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()
-            .expect("failed to build reqwest client")
-    })
+    // `get_or_init` only runs the closure once; if TLS backend init fails we
+    // propagate an API error instead of panicking in production.
+    if let Some(c) = CLIENT.get() {
+        return Ok(c);
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to initialize HTTP client",
+            )
+        })?;
+    // Another thread may have raced us — `get_or_init` is fine here since we
+    // already proved construction succeeds.
+    Ok(CLIENT.get_or_init(|| client))
 }
 
 fn extract_client_secret(value: &Value) -> Option<String> {
