@@ -45,15 +45,31 @@ pub struct TranscribeSession {
 /// `GET /transcribe/status` — check if transcription is configured.
 ///
 /// Requires NIP-98 auth. Returns whether the relay has an OpenAI API key
-/// configured for real-time transcription.
+/// configured for real-time transcription **and** the caller is allowed to
+/// mint sessions (i.e. is a relay member). This prevents non-members from
+/// being prompted for microphone access only to hit a 403 on session creation.
 pub async fn transcribe_status(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<TranscribeStatus>, (StatusCode, Json<Value>)> {
-    let _pubkey = authenticate(&state, &headers, "/transcribe/status", "GET").await?;
+    let pubkey = authenticate(&state, &headers, "/transcribe/status", "GET").await?;
+
+    // Check both: API key configured AND caller can actually mint sessions.
+    let configured = if state.config.openai_api_key.is_some() {
+        // On membership-required relays, `authenticate` already verified
+        // membership. On open relays, we need to check explicitly since
+        // `/transcribe/session` enforces hard membership regardless.
+        if state.config.require_relay_membership {
+            true
+        } else {
+            can_mint_session(&state, &headers, &pubkey).await
+        }
+    } else {
+        false
+    };
 
     Ok(Json(TranscribeStatus {
-        configured: state.config.openai_api_key.is_some(),
+        configured,
         model: state.config.transcription_model.clone(),
     }))
 }
@@ -96,25 +112,16 @@ pub async fn create_transcribe_session(
 
     let client = openai_client().map_err(|(status, msg)| api_error(status, msg))?;
 
+    // Build the session payload — VAD configuration depends on the model.
+    // `gpt-realtime-whisper` requires manual audio commit (no turn detection),
+    // while other models (e.g. `whisper-1`) use server-side VAD.
+    let session_payload = build_session_payload(&model);
+
     let response = client
         .post(OPENAI_REALTIME_CLIENT_SECRETS_URL)
         .header("Authorization", format!("Bearer {api_key}"))
         .header("Content-Type", "application/json")
-        .json(&serde_json::json!({
-            "session": {
-                "type": "transcription",
-                "audio": {
-                    "input": {
-                        "transcription": {
-                            "model": model,
-                        },
-                        "turn_detection": {
-                            "type": "server_vad",
-                        }
-                    }
-                }
-            }
-        }))
+        .json(&session_payload)
         .send()
         .await
         .map_err(|e| {
@@ -158,6 +165,50 @@ pub async fn create_transcribe_session(
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Check whether the caller can mint a transcription session (i.e. is a relay
+/// member or delegated by one). Used by `/transcribe/status` to avoid showing
+/// the mic button to users who would get a 403 on session creation.
+async fn can_mint_session(
+    state: &AppState,
+    headers: &HeaderMap,
+    pubkey: &nostr::PublicKey,
+) -> bool {
+    // Try the same membership check that `require_relay_member` uses.
+    require_relay_member(state, headers, pubkey).await.is_ok()
+}
+
+/// Build the OpenAI Realtime session payload with model-appropriate VAD config.
+///
+/// - `gpt-realtime-whisper` (live transcription model): omits `turn_detection`
+///   entirely — audio is committed manually by the client per OpenAI guidance.
+/// - Other models (e.g. `whisper-1`): use `server_vad` for automatic turn
+///   detection.
+fn build_session_payload(model: &str) -> Value {
+    let uses_manual_commit = model.contains("realtime-whisper");
+
+    let mut audio_input = serde_json::json!({
+        "transcription": {
+            "model": model,
+        }
+    });
+
+    if !uses_manual_commit {
+        audio_input.as_object_mut().unwrap().insert(
+            "turn_detection".to_string(),
+            serde_json::json!({ "type": "server_vad" }),
+        );
+    }
+
+    serde_json::json!({
+        "session": {
+            "type": "transcription",
+            "audio": {
+                "input": audio_input
+            }
+        }
+    })
+}
 
 /// Authenticate the request using the same NIP-98 / X-Pubkey pattern as the
 /// bridge endpoints, plus replay detection and relay membership enforcement.
@@ -365,5 +416,35 @@ mod tests {
     fn returns_none_for_missing_secret() {
         let body = json!({ "id": "sess_123", "model": "gpt-4o" });
         assert_eq!(extract_client_secret(&body), None);
+    }
+
+    #[test]
+    fn build_session_payload_whisper1_includes_server_vad() {
+        use super::build_session_payload;
+        let payload = build_session_payload("whisper-1");
+        let td = &payload["session"]["audio"]["input"]["turn_detection"];
+        assert_eq!(td["type"], "server_vad");
+    }
+
+    #[test]
+    fn build_session_payload_realtime_whisper_omits_turn_detection() {
+        use super::build_session_payload;
+        let payload = build_session_payload("gpt-realtime-whisper");
+        let td = &payload["session"]["audio"]["input"]["turn_detection"];
+        assert!(
+            td.is_null(),
+            "turn_detection should be absent for realtime-whisper model"
+        );
+    }
+
+    #[test]
+    fn build_session_payload_realtime_whisper_variant_omits_turn_detection() {
+        use super::build_session_payload;
+        let payload = build_session_payload("gpt-4o-realtime-whisper-20250512");
+        let td = &payload["session"]["audio"]["input"]["turn_detection"];
+        assert!(
+            td.is_null(),
+            "turn_detection should be absent for any realtime-whisper variant"
+        );
     }
 }
