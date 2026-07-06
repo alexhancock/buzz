@@ -35,11 +35,18 @@ const DICTATION_STATE_EVENT: &str = "dictation-state";
 pub(crate) struct DictationState {
     /// The running STT engine, if dictation is active.
     engine: Option<Arc<SttEngine>>,
+    /// Monotonically increasing session counter. Included in all emitted events
+    /// so the frontend can ignore stale transcripts from a previous session's
+    /// forwarder that arrive after a new session has started.
+    session_id: u64,
 }
 
 impl DictationState {
     pub fn new() -> Self {
-        Self { engine: None }
+        Self {
+            engine: None,
+            session_id: 0,
+        }
     }
 }
 
@@ -49,7 +56,7 @@ impl DictationState {
 /// `dictation-transcript` events to the frontend as text is recognized.
 /// Returns an error if models are not downloaded yet.
 #[tauri::command]
-pub async fn start_dictation(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn start_dictation(state: State<'_, AppState>) -> Result<u64, String> {
     // Check if models are ready.
     if !models::is_stt_ready() {
         // Kick off download if not already in progress.
@@ -77,14 +84,16 @@ pub async fn start_dictation(state: State<'_, AppState>) -> Result<(), String> {
     let (engine, text_rx) = SttEngine::new(config)?;
     let engine = Arc::new(engine);
 
-    // Store the engine in state.
-    {
+    // Store the engine in state and increment the session counter.
+    let session_id = {
         let mut ds = state
             .dictation_state
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         ds.engine = Some(Arc::clone(&engine));
-    }
+        ds.session_id += 1;
+        ds.session_id
+    };
 
     // Spawn a task that forwards transcribed text to the frontend.
     let app_handle = state
@@ -94,11 +103,14 @@ pub async fn start_dictation(state: State<'_, AppState>) -> Result<(), String> {
         .clone();
 
     if let Some(handle) = app_handle {
-        let _ = handle.emit(DICTATION_STATE_EVENT, "started");
-        spawn_dictation_forwarder(text_rx, handle);
+        let _ = handle.emit(
+            DICTATION_STATE_EVENT,
+            serde_json::json!({ "state": "started", "session": session_id }),
+        );
+        spawn_dictation_forwarder(text_rx, handle, session_id);
     }
 
-    Ok(())
+    Ok(session_id)
 }
 
 /// `stop_dictation` — stop the active dictation session.
@@ -195,23 +207,31 @@ fn stop_dictation_inner(state: &AppState) {
 
 /// Spawn an async task that reads transcribed text and emits Tauri events.
 ///
-/// When the channel closes (engine stopped), the forwarder emits
-/// `dictation-state: stopped` so the frontend knows all pending transcripts
-/// have been delivered.
+/// Each event includes the `session` ID so the frontend can ignore stale
+/// transcripts from a previous session's forwarder. When the channel closes
+/// (engine stopped), the forwarder emits `dictation-state: stopped`.
 fn spawn_dictation_forwarder(
     mut text_rx: tokio::sync::mpsc::Receiver<String>,
     app_handle: tauri::AppHandle,
+    session_id: u64,
 ) {
     tauri::async_runtime::spawn(async move {
         while let Some(text) = text_rx.recv().await {
             if text.is_empty() {
                 continue;
             }
-            if app_handle.emit(DICTATION_TRANSCRIPT_EVENT, &text).is_err() {
+            let payload = serde_json::json!({ "text": text, "session": session_id });
+            if app_handle
+                .emit(DICTATION_TRANSCRIPT_EVENT, payload)
+                .is_err()
+            {
                 break; // App window closed.
             }
         }
         // All transcripts forwarded — signal the frontend that dictation is done.
-        let _ = app_handle.emit(DICTATION_STATE_EVENT, "stopped");
+        let _ = app_handle.emit(
+            DICTATION_STATE_EVENT,
+            serde_json::json!({ "state": "stopped", "session": session_id }),
+        );
     });
 }

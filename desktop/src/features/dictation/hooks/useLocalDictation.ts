@@ -70,9 +70,10 @@ export function useLocalDictation({
   const unlistenStateRef = useRef<UnlistenFn | null>(null);
   const onRecordingStartRef = useRef(onRecordingStart);
   const onTranscriptTextRef = useRef(onTranscriptText);
-  // Session ID — incremented on each start. Transcript events from a previous
-  // session's forwarder are ignored by comparing against the active session.
-  const sessionIdRef = useRef(0);
+  // Native session ID — set after `start_dictation` returns. Transcript and
+  // state events include this ID so we can definitively ignore stale events
+  // from a previous session's forwarder.
+  const nativeSessionRef = useRef<number>(0);
   // Abort flag — set when stop/cancel is called while startRecording is still
   // awaiting async setup. The start resumes and bails before activating.
   const startAbortedRef = useRef(false);
@@ -190,68 +191,72 @@ export function useLocalDictation({
   const startRecording = useCallback(async () => {
     if (!isEnabled || isStarting || isRecording) return;
 
-    // Increment session ID and clear abort flag for this new start attempt.
-    const thisSession = ++sessionIdRef.current;
+    // Clear abort flag for this new start attempt.
     startAbortedRef.current = false;
 
     setIsStarting(true);
     onRecordingStartRef.current?.();
 
     try {
-      // 1. Listen for transcript events from the native layer.
-      // Only accept events matching the current session to avoid stale
-      // transcripts from a previous session's forwarder leaking in.
-      const unlistenTranscript = await listen<string>(
-        DICTATION_TRANSCRIPT_EVENT,
-        (event) => {
-          if (sessionIdRef.current !== thisSession) return;
-          if (event.payload) {
-            onTranscriptTextRef.current(event.payload);
-          }
-        },
-      );
-      // Bail if stop/cancel was called while we were awaiting.
-      if (startAbortedRef.current) {
-        unlistenTranscript();
-        return;
-      }
-      unlistenTranscriptRef.current = unlistenTranscript;
-
-      const unlistenState = await listen<string>(
-        DICTATION_STATE_EVENT,
-        (event) => {
-          if (sessionIdRef.current !== thisSession) return;
-          if (event.payload === "stopped") {
-            setIsRecording(false);
-            setIsTranscribing(false);
-            // Clean up event listeners now that the session is fully done.
-            if (unlistenTranscriptRef.current) {
-              unlistenTranscriptRef.current();
-              unlistenTranscriptRef.current = null;
-            }
-            if (unlistenStateRef.current) {
-              unlistenStateRef.current();
-              unlistenStateRef.current = null;
-            }
-          }
-        },
-      );
-      // Bail if stop/cancel was called while we were awaiting.
-      if (startAbortedRef.current) {
-        unlistenTranscript();
-        unlistenState();
-        return;
-      }
-      unlistenStateRef.current = unlistenState;
-
-      // 2. Start the native STT engine.
-      await invoke("start_dictation");
+      // 1. Start the native STT engine — returns the session ID used to tag events.
+      const sessionId = await invoke<number>("start_dictation");
+      nativeSessionRef.current = sessionId;
 
       // Bail if aborted during engine start.
       if (startAbortedRef.current) {
         invoke("stop_dictation").catch(() => {});
         return;
       }
+
+      // 2. Listen for transcript events from the native layer.
+      // Each event includes a `session` ID so we can definitively ignore stale
+      // transcripts from a previous session's forwarder.
+      const unlistenTranscript = await listen<{
+        text: string;
+        session: number;
+      }>(DICTATION_TRANSCRIPT_EVENT, (event) => {
+        const { text, session } = event.payload;
+        if (session !== nativeSessionRef.current) return;
+        if (text) {
+          onTranscriptTextRef.current(text);
+        }
+      });
+      // Bail if stop/cancel was called while we were awaiting.
+      if (startAbortedRef.current) {
+        unlistenTranscript();
+        invoke("stop_dictation").catch(() => {});
+        return;
+      }
+      unlistenTranscriptRef.current = unlistenTranscript;
+
+      const unlistenState = await listen<{
+        state: string;
+        session: number;
+      }>(DICTATION_STATE_EVENT, (event) => {
+        const { state, session } = event.payload;
+        if (session !== nativeSessionRef.current) return;
+        if (state === "stopped") {
+          setIsRecording(false);
+          setIsTranscribing(false);
+          // Clean up event listeners now that the session is fully done.
+          if (unlistenTranscriptRef.current) {
+            unlistenTranscriptRef.current();
+            unlistenTranscriptRef.current = null;
+          }
+          if (unlistenStateRef.current) {
+            unlistenStateRef.current();
+            unlistenStateRef.current = null;
+          }
+        }
+      });
+      // Bail if stop/cancel was called while we were awaiting.
+      if (startAbortedRef.current) {
+        unlistenTranscript();
+        unlistenState();
+        invoke("stop_dictation").catch(() => {});
+        return;
+      }
+      unlistenStateRef.current = unlistenState;
 
       // 3. Capture mic audio.
       const stream = await navigator.mediaDevices.getUserMedia({
