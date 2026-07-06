@@ -303,6 +303,10 @@ pub struct AppState {
     /// Per-uploader sliding-window rate limiter for media upload starts.
     /// Key: uploader pubkey bytes (32). Value: (count, window_start).
     pub media_upload_rate_limiter: Arc<DashMap<[u8; 32], (u32, Instant)>>,
+    /// Per-pubkey sliding-window rate limiter for transcription session minting.
+    /// Key: requester pubkey bytes (32). Value: (count, window_start).
+    /// Bounds the cost of OpenAI Realtime sessions minted on the operator's bill.
+    pub transcribe_rate_limiter: Arc<DashMap<[u8; 32], (u32, Instant)>>,
     /// Current in-flight media uploads per uploader pubkey.
     pub media_uploads_in_flight: Arc<DashMap<[u8; 32], u32>>,
     /// Cache for observer agent-owner authorization (kind 24200).
@@ -441,6 +445,7 @@ impl AppState {
             observer_rate_limiter: Arc::new(DashMap::new()),
             mesh_connect_rate_limiter: Arc::new(DashMap::new()),
             media_upload_rate_limiter: Arc::new(DashMap::new()),
+            transcribe_rate_limiter: Arc::new(DashMap::new()),
             media_uploads_in_flight: Arc::new(DashMap::new()),
             observer_owner_cache: Arc::new(
                 moka::sync::Cache::builder()

@@ -7,6 +7,7 @@
 //! Both endpoints require NIP-98 auth (same as `/events`, `/query`, `/count`).
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use axum::{
     extract::State,
@@ -22,7 +23,9 @@ use super::api_error;
 
 const OPENAI_REALTIME_CLIENT_SECRETS_URL: &str =
     "https://api.openai.com/v1/realtime/client_secrets";
-const DEFAULT_TRANSCRIPTION_MODEL: &str = "whisper-1";
+
+/// Rate-limit window for transcription session minting.
+const TRANSCRIBE_RATE_WINDOW: Duration = Duration::from_secs(60);
 
 /// Response for `GET /transcribe/status`.
 #[derive(Serialize)]
@@ -47,11 +50,11 @@ pub async fn transcribe_status(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<TranscribeStatus>, (StatusCode, Json<Value>)> {
-    authenticate(&state, &headers, "/transcribe/status", "GET").await?;
+    let _pubkey = authenticate(&state, &headers, "/transcribe/status", "GET").await?;
 
     Ok(Json(TranscribeStatus {
         configured: state.config.openai_api_key.is_some(),
-        model: transcription_model(),
+        model: state.config.transcription_model.clone(),
     }))
 }
 
@@ -64,7 +67,18 @@ pub async fn create_transcribe_session(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<TranscribeSession>, (StatusCode, Json<Value>)> {
-    authenticate(&state, &headers, "/transcribe/session", "POST").await?;
+    let pubkey = authenticate(&state, &headers, "/transcribe/session", "POST").await?;
+
+    // Per-pubkey rate limit — each session mints a metered OpenAI Realtime
+    // connection on the operator's bill.
+    if transcribe_rate_limited(&state, &pubkey) {
+        metrics::counter!("buzz_transcribe_session_rejections_total", "reason" => "rate_limit")
+            .increment(1);
+        return Err(api_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "transcription session rate limit exceeded — try again shortly",
+        ));
+    }
 
     let api_key = state.config.openai_api_key.as_deref().ok_or_else(|| {
         api_error(
@@ -73,10 +87,9 @@ pub async fn create_transcribe_session(
         )
     })?;
 
-    let model = transcription_model();
+    let model = state.config.transcription_model.clone();
 
-    let client = reqwest::Client::new();
-    let response = client
+    let response = openai_client()
         .post(OPENAI_REALTIME_CLIENT_SECRETS_URL)
         .header("Authorization", format!("Bearer {api_key}"))
         .header("Content-Type", "application/json")
@@ -95,7 +108,6 @@ pub async fn create_transcribe_session(
                 }
             }
         }))
-        .timeout(std::time::Duration::from_secs(10))
         .send()
         .await
         .map_err(|e| {
@@ -142,12 +154,13 @@ pub async fn create_transcribe_session(
 
 /// Authenticate the request using the same NIP-98 / X-Pubkey pattern as the
 /// bridge endpoints, plus replay detection and relay membership enforcement.
+/// Returns the authenticated pubkey on success.
 async fn authenticate(
     state: &AppState,
     headers: &HeaderMap,
     path: &str,
     method: &str,
-) -> Result<(), (StatusCode, Json<Value>)> {
+) -> Result<nostr::PublicKey, (StatusCode, Json<Value>)> {
     let raw_host = headers
         .get("host")
         .and_then(|v| v.to_str().ok())
@@ -182,14 +195,37 @@ async fn authenticate(
     )
     .await?;
 
-    Ok(())
+    Ok(pubkey)
 }
 
-fn transcription_model() -> String {
-    std::env::var("BUZZ_TRANSCRIPTION_MODEL")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| DEFAULT_TRANSCRIPTION_MODEL.to_string())
+/// Per-pubkey sliding-window rate limiter for transcription session minting.
+fn transcribe_rate_limited(state: &AppState, pubkey: &nostr::PublicKey) -> bool {
+    let key: [u8; 32] = pubkey.to_bytes();
+    let now = Instant::now();
+    let limit = state.config.transcribe_sessions_per_minute;
+    let mut entry = state.transcribe_rate_limiter.entry(key).or_insert((0, now));
+    let (count, window_start) = entry.value_mut();
+    if now.duration_since(*window_start) >= TRANSCRIBE_RATE_WINDOW {
+        *count = 1;
+        *window_start = now;
+        return false;
+    }
+    if *count >= limit {
+        return true;
+    }
+    *count += 1;
+    false
+}
+
+/// Shared HTTP client for OpenAI requests (connection pooling).
+fn openai_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .expect("failed to build reqwest client")
+    })
 }
 
 fn extract_client_secret(value: &Value) -> Option<String> {

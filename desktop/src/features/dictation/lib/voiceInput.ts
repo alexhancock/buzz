@@ -1,4 +1,10 @@
-export const DEFAULT_AUTO_SUBMIT_PHRASE = "submit";
+/**
+ * Default auto-submit phrase. Empty string disables auto-submit — the user
+ * must manually press Enter/Send after dictation. The infrastructure for
+ * configurable phrases is in place (parseAutoSubmitPhrases, getAutoSubmitMatch)
+ * and can be wired to a user setting when we're ready to ship auto-submit.
+ */
+export const DEFAULT_AUTO_SUBMIT_PHRASE = "";
 
 const TRAILING_PUNCTUATION_REGEX = /[\s"'`.,!?;:)\]}]+$/u;
 

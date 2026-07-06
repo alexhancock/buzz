@@ -75,8 +75,16 @@ test("replaceTrailingTranscribedText_noDoubleSpaceBeforePunctuation", () => {
 
 test("getAutoSubmitMatch_returnsNullWhenPhraseAbsent", () => {
   assert.equal(
+    getAutoSubmitMatch("hello there", parseAutoSubmitPhrases("submit")),
+    null,
+  );
+});
+
+test("getAutoSubmitMatch_returnsNullWhenPhrasesEmpty", () => {
+  // DEFAULT_AUTO_SUBMIT_PHRASE is empty (auto-submit disabled by default).
+  assert.equal(
     getAutoSubmitMatch(
-      "hello there",
+      "send this message submit",
       parseAutoSubmitPhrases(DEFAULT_AUTO_SUBMIT_PHRASE),
     ),
     null,
@@ -86,7 +94,7 @@ test("getAutoSubmitMatch_returnsNullWhenPhraseAbsent", () => {
 test("getAutoSubmitMatch_matchesTrailingPhraseAndStripsIt", () => {
   const match = getAutoSubmitMatch(
     "send this message submit",
-    parseAutoSubmitPhrases(DEFAULT_AUTO_SUBMIT_PHRASE),
+    parseAutoSubmitPhrases("submit"),
   );
   assert.ok(match);
   assert.equal(match.matchedPhrase, "submit");
@@ -98,7 +106,7 @@ test("getAutoSubmitMatch_ignoresPhraseMidSentence", () => {
   assert.equal(
     getAutoSubmitMatch(
       "submit the form later",
-      parseAutoSubmitPhrases(DEFAULT_AUTO_SUBMIT_PHRASE),
+      parseAutoSubmitPhrases("submit"),
     ),
     null,
   );
@@ -115,7 +123,7 @@ test("getAutoSubmitMatch_requiresWordBoundaryBeforePhrase", () => {
 test("getAutoSubmitMatch_toleratesTrailingPunctuation", () => {
   const match = getAutoSubmitMatch(
     "ship it submit.",
-    parseAutoSubmitPhrases(DEFAULT_AUTO_SUBMIT_PHRASE),
+    parseAutoSubmitPhrases("submit"),
   );
   assert.ok(match);
   assert.equal(match.textWithoutPhrase, "ship it");

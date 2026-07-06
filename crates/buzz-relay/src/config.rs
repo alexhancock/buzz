@@ -120,6 +120,12 @@ pub struct Config {
     pub media_max_concurrent_uploads_per_pubkey: u32,
     /// Maximum media upload starts accepted from one pubkey per minute.
     pub media_uploads_per_minute: u32,
+    /// Maximum transcription sessions one pubkey can mint per minute.
+    /// Each session opens a metered OpenAI Realtime connection on the operator's
+    /// bill, so this bounds cost exposure from a single member.
+    pub transcribe_sessions_per_minute: u32,
+    /// Transcription model to use (default: whisper-1).
+    pub transcription_model: String,
 
     /// Optional override for ephemeral channel TTL (in seconds).
     /// When set, any channel created with a TTL tag will use this value instead
@@ -347,6 +353,17 @@ impl Config {
             .filter(|&v| v > 0)
             .unwrap_or(30);
 
+        let transcribe_sessions_per_minute: u32 =
+            std::env::var("BUZZ_TRANSCRIBE_SESSIONS_PER_MINUTE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .filter(|&v| v > 0)
+                .unwrap_or(5);
+        let transcription_model: String = std::env::var("BUZZ_TRANSCRIPTION_MODEL")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "whisper-1".to_string());
+
         let ephemeral_ttl_override = std::env::var("BUZZ_EPHEMERAL_TTL_OVERRIDE")
             .ok()
             .and_then(|v| v.parse::<i32>().ok())
@@ -443,6 +460,8 @@ impl Config {
             media_max_concurrent_uploads,
             media_max_concurrent_uploads_per_pubkey,
             media_uploads_per_minute,
+            transcribe_sessions_per_minute,
+            transcription_model,
             ephemeral_ttl_override,
             git_repo_path,
             git_max_pack_bytes,

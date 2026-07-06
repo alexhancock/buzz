@@ -267,6 +267,7 @@ function MessageComposerImpl({
 
   const submitMessageRef = React.useRef<() => void>(() => {});
   const setEditorContentRef = React.useRef<(text: string) => void>(() => {});
+  const stopDictationRef = React.useRef<() => void>(() => {});
   const dictation = useComposerDictation({
     syncContentRef: syncContentRefFromEditorRef,
     disabledRef,
@@ -277,6 +278,7 @@ function MessageComposerImpl({
     submitMessageRef,
     draftKey: effectiveDraftKey,
   });
+  stopDictationRef.current = dictation.stopRecording;
   const composerScrollRef = React.useRef<HTMLDivElement>(null);
   // Set after `useLinkEditor` exists below; the editor's link-click handler
   // delegates through this ref to break the hook ordering cycle (the editor
@@ -569,11 +571,8 @@ function MessageComposerImpl({
         spoileredAttachmentUrls,
       );
 
-      // NIP-30: attach `["emoji", shortcode, url]` tags for custom emoji in the
-      // edited body, exactly like the send path. Without this an edited message
-      // ships with no emoji tags, so the receiver can't resolve a `:shortcode:`
-      // and renders the literal text. `?? []` preserves edit semantics (a
-      // defined-but-empty media set means "wipe attachments").
+      // NIP-30 emoji tags for the edited body (mirrors the send path).
+      // `?? []` preserves edit semantics (empty = "wipe attachments").
       const outgoingTags =
         mergeOutgoingTags(
           mediaTags,
@@ -615,6 +614,8 @@ function MessageComposerImpl({
     ) {
       return;
     }
+
+    stopDictationRef.current(); // stop dictation so late transcripts don't refill
 
     const capturedThreadContext = onCaptureSendContext?.() ?? null;
     // If a thread-reply composer reported no reply target at submit time,
@@ -708,10 +709,8 @@ function MessageComposerImpl({
   );
 
   // ── Keyboard handling ───────────────────────────────────────────────
-  // Tiptap handles formatting shortcuts (⌘B, ⌘I, etc.) natively.
-  // Plain Enter → submit is now handled inside the Tiptap `submitOnEnter`
-  // extension (fires before ProseMirror's splitBlock). This wrapper only
-  // handles autocomplete arrow/enter keys and Escape for edit mode.
+  // Autocomplete arrow/enter keys and Escape for edit mode only; plain
+  // Enter → submit is in the Tiptap `submitOnEnter` extension.
   const handleEditorKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
       // Let autocomplete handle keys first
