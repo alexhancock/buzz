@@ -8,6 +8,8 @@ export const TRANSCRIPT_DELTA_EVENT =
   "conversation.item.input_audio_transcription.delta";
 export const TRANSCRIPT_COMPLETED_EVENT =
   "conversation.item.input_audio_transcription.completed";
+export const TRANSCRIPT_FAILED_EVENT =
+  "conversation.item.input_audio_transcription.failed";
 export const BUFFER_COMMITTED_EVENT = "input_audio_buffer.committed";
 
 const MAX_BUFFER_CHUNKS = 500; // ~10s at 20ms per chunk

@@ -8,6 +8,7 @@ import {
   BUFFER_COMMITTED_EVENT,
   TRANSCRIPT_COMPLETED_EVENT,
   TRANSCRIPT_DELTA_EVENT,
+  TRANSCRIPT_FAILED_EVENT,
   commitAudioBuffer,
   connectPeerConnection,
   createAudioBufferCapture,
@@ -182,6 +183,13 @@ export function useRealtimeDictation({
       if (event.type === "error") {
         console.error("OpenAI realtime server error", event);
         toast.error(event.error?.message ?? "Voice input error");
+        return;
+      }
+
+      if (event.type === TRANSCRIPT_FAILED_EVENT) {
+        console.warn("OpenAI transcription failed for item", event);
+        setIsTranscribing(false);
+        toast.error(event.error?.message ?? "Transcription failed");
         return;
       }
 
