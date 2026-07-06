@@ -2,6 +2,7 @@ import { Mic } from "lucide-react";
 import { Button } from "@/shared/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { cn } from "@/shared/lib/cn";
+import { isMacPlatform } from "@/shared/lib/platform";
 
 interface DictationState {
   isEnabled: boolean;
@@ -22,25 +23,19 @@ export function DictationButton({
 }: DictationButtonProps) {
   if (!dictation.isEnabled) return null;
 
+  const shortcutHint = isMacPlatform() ? "⌘D" : "Ctrl+D";
+
   const tooltipText = dictation.isRecording
     ? "Stop recording"
     : dictation.isTranscribing
       ? "Transcribing…"
-      : "Dictate message";
-
-  // Allow the stop action whenever the mic is live (isRecording), even if
-  // the session setup is still in progress (isStarting) or the composer is
-  // disabled. Only block the button when idle + disabled, or when startup
-  // hasn't captured the mic yet (isStarting && !isRecording).
-  const isDisabled = dictation.isRecording
-    ? false
-    : disabled || dictation.isStarting;
+      : null;
 
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <Button
-          aria-label={tooltipText}
+          aria-label={tooltipText ?? "Voice Dictation"}
           aria-pressed={dictation.isRecording}
           className={cn(
             "rounded-full",
@@ -48,7 +43,9 @@ export function DictationButton({
               "bg-destructive text-destructive-foreground hover:bg-destructive/90 hover:text-destructive-foreground active:bg-destructive active:text-destructive-foreground",
             dictation.isTranscribing && "animate-pulse",
           )}
-          disabled={isDisabled}
+          disabled={
+            dictation.isRecording ? false : disabled || dictation.isStarting
+          }
           onClick={dictation.toggleRecording}
           size="icon"
           type="button"
@@ -57,7 +54,16 @@ export function DictationButton({
           <Mic />
         </Button>
       </TooltipTrigger>
-      <TooltipContent>{tooltipText}</TooltipContent>
+      <TooltipContent>
+        {tooltipText ?? (
+          <span className="flex items-center gap-1.5">
+            Voice Dictation
+            <kbd className="rounded border border-foreground/10 px-1 py-0.5 text-2xs font-medium text-foreground/60">
+              {shortcutHint}
+            </kbd>
+          </span>
+        )}
+      </TooltipContent>
     </Tooltip>
   );
 }

@@ -181,6 +181,14 @@ export const KEYBOARD_SHORTCUTS: KeyboardShortcut[] = [
     keysWindows: "Ctrl+Space",
     category: "Messages",
   },
+  {
+    id: "voice-dictation",
+    label: "Voice Dictation",
+    description: "Start or stop voice dictation in the composer",
+    keys: "⌘D",
+    keysWindows: "Ctrl+D",
+    category: "Messages",
+  },
 
   // Formatting
   {

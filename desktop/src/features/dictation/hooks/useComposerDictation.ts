@@ -64,12 +64,23 @@ export function useComposerDictation({
 
   // Auto-cancel dictation when the composer becomes disabled mid-recording
   // (e.g. channel becomes read-only, parent send state disables thread composer).
-  // Without this, the WebRTC session keeps running with no way to stop it.
+  // Without this, the STT session keeps running with no way to stop it.
   useEffect(() => {
     if (disabled && dictation.isRecording) {
       dictation.cancelRecording();
     }
   }, [disabled, dictation.isRecording, dictation.cancelRecording]);
+
+  // ⌘D global shortcut — dispatched from AppShell's keydown handler.
+  useEffect(() => {
+    function handleToggle() {
+      dictation.toggleRecording();
+    }
+    window.addEventListener("buzz:toggle-dictation", handleToggle);
+    return () => {
+      window.removeEventListener("buzz:toggle-dictation", handleToggle);
+    };
+  }, [dictation.toggleRecording]);
 
   return dictation;
 }

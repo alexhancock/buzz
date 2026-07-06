@@ -7,7 +7,6 @@ import {
   replaceTrailingTranscribedText,
 } from "../lib/voiceInput";
 import { useLocalDictation } from "./useLocalDictation";
-import { useRealtimeDictation } from "./useRealtimeDictation";
 
 interface UseDictationOptions {
   /** Returns the current composer text (must be fresh — synced from editor). */
@@ -71,25 +70,13 @@ export function useDictation({
     [autoSubmitPhrases, getText, onSend, isSendBlockedRef, setText],
   );
 
-  // Try local STT first (offline, no API key needed).
-  const localDictation = useLocalDictation({
+  const dictation = useLocalDictation({
     onRecordingStart: () => {
       lastTranscriptRef.current = "";
     },
     onTranscriptText: handleTranscript,
   });
 
-  // Fall back to cloud (OpenAI Realtime) if local is unavailable.
-  const cloudDictation = useRealtimeDictation({
-    disabled: localDictation.isEnabled, // Disable cloud when local is available
-    onRecordingStart: () => {
-      lastTranscriptRef.current = "";
-    },
-    onTranscriptText: handleTranscript,
-  });
-
-  // Use whichever is enabled — local takes priority.
-  const dictation = localDictation.isEnabled ? localDictation : cloudDictation;
   stopRecordingRef.current = dictation.stopRecording;
 
   return dictation;

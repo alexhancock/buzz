@@ -557,6 +557,12 @@ export function AppShell() {
         return;
       }
 
+      if (key === "d" && !event.shiftKey) {
+        event.preventDefault();
+        window.dispatchEvent(new CustomEvent("buzz:toggle-dictation"));
+        return;
+      }
+
       if (key === "a" && event.shiftKey) {
         event.preventDefault();
         void goHome();
