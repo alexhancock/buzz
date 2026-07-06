@@ -9,6 +9,7 @@ use tauri::{AppHandle, Manager};
 #[cfg(feature = "mesh-llm")]
 use tokio::sync::Mutex as AsyncMutex;
 
+use crate::dictation::DictationState;
 use crate::huddle::HuddleState;
 use crate::managed_agents::config_bridge::SessionConfigCache;
 use crate::managed_agents::ManagedAgentProcess;
@@ -22,11 +23,7 @@ pub struct AppState {
     pub channel_templates_store_lock: Mutex<()>,
     pub managed_agent_processes: Mutex<HashMap<String, ManagedAgentProcess>>,
     pub huddle_state: Mutex<HuddleState>,
-    /// Tauri app handle — stored after setup so huddle commands can emit
-    /// `huddle-state-changed` events without needing the handle threaded
-    /// through every call site.
-    ///
-    /// Set once during `setup()` in `lib.rs`; never cleared.
+    /// Tauri app handle — set once during `setup()`, never cleared.
     pub app_handle: Mutex<Option<AppHandle>>,
     /// Selected audio output device name. `None` = system default.
     /// Used by `connect_audio_relay` and TTS pipeline when opening sinks.
@@ -46,6 +43,8 @@ pub struct AppState {
     /// listener is up before any restore/create can request a connection.
     #[cfg(feature = "mesh-llm")]
     pub mesh_coordinator: AsyncMutex<Option<crate::mesh_llm::MeshCoordinator>>,
+    /// Local dictation state (Parakeet STT for composer voice input).
+    pub dictation_state: Mutex<DictationState>,
 }
 
 /// Parse the `BUZZ_PRIVATE_KEY` env var into identity keys. `Some` means the
@@ -108,6 +107,7 @@ pub fn build_app_state() -> AppState {
         mesh_llm_runtime: AsyncMutex::new(None),
         #[cfg(feature = "mesh-llm")]
         mesh_coordinator: AsyncMutex::new(None),
+        dictation_state: Mutex::new(DictationState::new()),
     }
 }
 

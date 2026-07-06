@@ -6,6 +6,7 @@ import {
   parseAutoSubmitPhrases,
   replaceTrailingTranscribedText,
 } from "../lib/voiceInput";
+import { useLocalDictation } from "./useLocalDictation";
 import { useRealtimeDictation } from "./useRealtimeDictation";
 
 interface UseDictationOptions {
@@ -63,11 +64,6 @@ export function useDictation({
         return;
       }
 
-      // Set the text first so the composer shows the final dictated content,
-      // then trigger send. We intentionally do NOT clear the composer here —
-      // the send flow in MessageComposer handles clearing on successful send.
-      // If a mention dialog opens (non-member mention), the text stays in the
-      // composer so the user doesn't lose their dictated message.
       setText(textWithoutPhrase.trim());
       onSend(textWithoutPhrase.trim());
       lastTranscriptRef.current = "";
@@ -75,12 +71,25 @@ export function useDictation({
     [autoSubmitPhrases, getText, onSend, isSendBlockedRef, setText],
   );
 
-  const dictation = useRealtimeDictation({
+  // Try local STT first (offline, no API key needed).
+  const localDictation = useLocalDictation({
     onRecordingStart: () => {
       lastTranscriptRef.current = "";
     },
     onTranscriptText: handleTranscript,
   });
+
+  // Fall back to cloud (OpenAI Realtime) if local is unavailable.
+  const cloudDictation = useRealtimeDictation({
+    disabled: localDictation.isEnabled, // Disable cloud when local is available
+    onRecordingStart: () => {
+      lastTranscriptRef.current = "";
+    },
+    onTranscriptText: handleTranscript,
+  });
+
+  // Use whichever is enabled — local takes priority.
+  const dictation = localDictation.isEnabled ? localDictation : cloudDictation;
   stopRecordingRef.current = dictation.stopRecording;
 
   return dictation;
