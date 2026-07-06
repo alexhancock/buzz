@@ -70,6 +70,12 @@ export function useLocalDictation({
   const unlistenStateRef = useRef<UnlistenFn | null>(null);
   const onRecordingStartRef = useRef(onRecordingStart);
   const onTranscriptTextRef = useRef(onTranscriptText);
+  // Session ID — incremented on each start. Transcript events from a previous
+  // session's forwarder are ignored by comparing against the active session.
+  const sessionIdRef = useRef(0);
+  // Abort flag — set when stop/cancel is called while startRecording is still
+  // awaiting async setup. The start resumes and bails before activating.
+  const startAbortedRef = useRef(false);
 
   onRecordingStartRef.current = onRecordingStart;
   onTranscriptTextRef.current = onTranscriptText;
@@ -184,24 +190,37 @@ export function useLocalDictation({
   const startRecording = useCallback(async () => {
     if (!isEnabled || isStarting || isRecording) return;
 
+    // Increment session ID and clear abort flag for this new start attempt.
+    const thisSession = ++sessionIdRef.current;
+    startAbortedRef.current = false;
+
     setIsStarting(true);
     onRecordingStartRef.current?.();
 
     try {
       // 1. Listen for transcript events from the native layer.
+      // Only accept events matching the current session to avoid stale
+      // transcripts from a previous session's forwarder leaking in.
       const unlistenTranscript = await listen<string>(
         DICTATION_TRANSCRIPT_EVENT,
         (event) => {
+          if (sessionIdRef.current !== thisSession) return;
           if (event.payload) {
             onTranscriptTextRef.current(event.payload);
           }
         },
       );
+      // Bail if stop/cancel was called while we were awaiting.
+      if (startAbortedRef.current) {
+        unlistenTranscript();
+        return;
+      }
       unlistenTranscriptRef.current = unlistenTranscript;
 
       const unlistenState = await listen<string>(
         DICTATION_STATE_EVENT,
         (event) => {
+          if (sessionIdRef.current !== thisSession) return;
           if (event.payload === "stopped") {
             setIsRecording(false);
             setIsTranscribing(false);
@@ -217,10 +236,22 @@ export function useLocalDictation({
           }
         },
       );
+      // Bail if stop/cancel was called while we were awaiting.
+      if (startAbortedRef.current) {
+        unlistenTranscript();
+        unlistenState();
+        return;
+      }
       unlistenStateRef.current = unlistenState;
 
       // 2. Start the native STT engine.
       await invoke("start_dictation");
+
+      // Bail if aborted during engine start.
+      if (startAbortedRef.current) {
+        invoke("stop_dictation").catch(() => {});
+        return;
+      }
 
       // 3. Capture mic audio.
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -231,6 +262,14 @@ export function useLocalDictation({
         },
       });
       streamRef.current = stream;
+
+      // Bail if aborted during mic permission prompt.
+      if (startAbortedRef.current) {
+        for (const track of stream.getTracks()) track.stop();
+        streamRef.current = null;
+        invoke("stop_dictation").catch(() => {});
+        return;
+      }
 
       // 4. Set up AudioWorklet to send PCM to native layer.
       const audioContext = new AudioContext({ sampleRate: 48000 });
@@ -312,6 +351,8 @@ export function useLocalDictation({
   }, [cleanup, flushAudioBatch, isEnabled, isRecording, isStarting]);
 
   const stopRecording = useCallback(() => {
+    // Signal any in-flight startRecording to bail after its next await.
+    startAbortedRef.current = true;
     // Stop batch timer immediately.
     if (batchTimerRef.current) {
       clearInterval(batchTimerRef.current);
@@ -342,6 +383,8 @@ export function useLocalDictation({
   }, [flushAudioBatch]);
 
   const cancelRecording = useCallback(() => {
+    // Signal any in-flight startRecording to bail after its next await.
+    startAbortedRef.current = true;
     cleanup();
     invoke("stop_dictation").catch(() => {});
     setIsRecording(false);
