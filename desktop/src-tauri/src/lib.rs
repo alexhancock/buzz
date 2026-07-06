@@ -70,6 +70,28 @@ fn perform_sidebar_default_haptic() {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Disable macOS press-and-hold accent picker so that holding shortcut keys
+    // (e.g. ⌘D for dictation push-to-talk) doesn't trigger the character popup.
+    // Writes to the app's own domain — does not affect other apps.
+    #[cfg(target_os = "macos")]
+    {
+        // Use the bundle ID for production; dev builds use the .dev suffix.
+        let bundle_id = if cfg!(debug_assertions) {
+            "xyz.block.buzz.app.dev"
+        } else {
+            "xyz.block.buzz.app"
+        };
+        let _ = std::process::Command::new("defaults")
+            .args([
+                "write",
+                bundle_id,
+                "ApplePressAndHoldEnabled",
+                "-bool",
+                "false",
+            ])
+            .output();
+    }
+
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             // Focus the existing window when a duplicate instance launches.

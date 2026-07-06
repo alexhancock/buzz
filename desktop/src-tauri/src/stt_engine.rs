@@ -40,6 +40,11 @@ pub const DEFAULT_SILENCE_FLUSH_FRAMES: usize = 19;
 /// Silence frames for dictation (~400ms) — slightly longer for more coherent sentences.
 pub const DICTATION_SILENCE_FLUSH_FRAMES: usize = 25;
 
+/// Periodic partial flush interval for dictation streaming (~2 seconds of speech
+/// at 16 kHz). When speech exceeds this threshold without a silence gap, the engine
+/// flushes a partial transcript so the user sees text appearing on-the-fly.
+pub const DICTATION_PARTIAL_FLUSH_SAMPLES: usize = 16_000 * 2;
+
 /// Default maximum speech buffer: 30 seconds at 16 kHz.
 pub const DEFAULT_MAX_SPEECH_SAMPLES: usize = 16_000 * 30;
 
@@ -56,6 +61,10 @@ pub struct SttEngineConfig {
     pub silence_flush_frames: usize,
     /// Maximum speech buffer size in samples (OOM guard).
     pub max_speech_samples: usize,
+    /// Optional: when set, the engine flushes a partial transcript every N samples
+    /// of continuous speech (even without a silence gap). This enables on-the-fly
+    /// transcription for dictation. Set to `None` for huddle (silence-only flush).
+    pub partial_flush_samples: Option<usize>,
     /// Optional: shared flag set by TTS while audio is playing (echo prevention).
     pub tts_active: Option<Arc<AtomicBool>>,
     /// Optional: TTS cancel flag — set by STT on barge-in detection.
@@ -329,9 +338,15 @@ fn stt_worker(
                     ptt_active_flag.as_ref(),
                     config.silence_flush_frames,
                     config.max_speech_samples,
+                    config.partial_flush_samples,
                 );
             }
         }
+    }
+
+    // ── Final flush — transcribe any remaining speech on shutdown/disconnect ──
+    if !speech_buf.is_empty() {
+        flush_to_stt(&speech_buf, &recognizer, &text_tx);
     }
 }
 
@@ -377,6 +392,7 @@ fn process_16k_samples(
     ptt_active: Option<&Arc<AtomicBool>>,
     silence_flush_threshold: usize,
     max_speech_samples: usize,
+    partial_flush_samples: Option<usize>,
 ) {
     leftover.extend_from_slice(samples);
 
@@ -455,6 +471,15 @@ fn process_16k_samples(
                 speech_buf.clear();
                 *silence_frames = 0;
                 *in_speech = false;
+            }
+            // Periodic partial flush — emit intermediate transcript so text
+            // appears on-the-fly during continuous speech (dictation mode).
+            else if let Some(threshold) = partial_flush_samples {
+                if speech_buf.len() >= threshold {
+                    flush_to_stt(speech_buf, recognizer, text_tx);
+                    speech_buf.clear();
+                    // Stay in_speech — the user is still talking.
+                }
             }
         } else if *in_speech {
             speech_buf.extend_from_slice(&frame);

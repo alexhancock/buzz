@@ -120,7 +120,6 @@ export function useLocalDictation({
       const unlistenTranscript = await listen<string>(
         DICTATION_TRANSCRIPT_EVENT,
         (event) => {
-          setIsTranscribing(false);
           if (event.payload) {
             onTranscriptTextRef.current(event.payload);
           }
@@ -134,6 +133,15 @@ export function useLocalDictation({
           if (event.payload === "stopped") {
             setIsRecording(false);
             setIsTranscribing(false);
+            // Clean up event listeners now that the session is fully done.
+            if (unlistenTranscriptRef.current) {
+              unlistenTranscriptRef.current();
+              unlistenTranscriptRef.current = null;
+            }
+            if (unlistenStateRef.current) {
+              unlistenStateRef.current();
+              unlistenStateRef.current = null;
+            }
           }
         },
       );
@@ -230,12 +238,27 @@ export function useLocalDictation({
   }, [cleanup, isEnabled, isRecording, isStarting]);
 
   const stopRecording = useCallback(() => {
-    cleanup();
+    // Stop mic and audio pipeline immediately so the user gets visual feedback,
+    // but keep isTranscribing=true until the native `stopped` event arrives
+    // (which fires only after the final transcript has been forwarded).
+    if (streamRef.current) {
+      for (const track of streamRef.current.getTracks()) {
+        track.stop();
+      }
+      streamRef.current = null;
+    }
+    if (workletRef.current) {
+      workletRef.current.disconnect();
+      workletRef.current = null;
+    }
+    if (audioContextRef.current) {
+      void audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
     invoke("stop_dictation").catch(() => {});
     setIsRecording(false);
-    // Keep isTranscribing briefly — final segment may still arrive.
-    setTimeout(() => setIsTranscribing(false), 500);
-  }, [cleanup]);
+    // isTranscribing stays true — cleared when `dictation-state: stopped` arrives.
+  }, []);
 
   const cancelRecording = useCallback(() => {
     cleanup();

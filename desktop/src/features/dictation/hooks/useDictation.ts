@@ -45,7 +45,10 @@ export function useDictation({
 
       if (!match) {
         setText(merged);
-        lastTranscriptRef.current = transcript;
+        // Reset to empty — each streaming partial is an independent segment
+        // (the native engine flushes and clears its buffer). The next transcript
+        // should be appended, not replace this one.
+        lastTranscriptRef.current = "";
         return;
       }
 

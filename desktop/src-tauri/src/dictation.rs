@@ -18,7 +18,8 @@ use tauri::{Emitter, State};
 use crate::app_state::AppState;
 use crate::huddle::models;
 use crate::stt_engine::{
-    SttEngine, SttEngineConfig, DEFAULT_MAX_SPEECH_SAMPLES, DICTATION_SILENCE_FLUSH_FRAMES,
+    SttEngine, SttEngineConfig, DEFAULT_MAX_SPEECH_SAMPLES, DICTATION_PARTIAL_FLUSH_SAMPLES,
+    DICTATION_SILENCE_FLUSH_FRAMES,
 };
 
 /// Tauri event name emitted when a dictation transcript segment is ready.
@@ -67,6 +68,7 @@ pub async fn start_dictation(state: State<'_, AppState>) -> Result<(), String> {
         model_dir,
         silence_flush_frames: DICTATION_SILENCE_FLUSH_FRAMES,
         max_speech_samples: DEFAULT_MAX_SPEECH_SAMPLES,
+        partial_flush_samples: Some(DICTATION_PARTIAL_FLUSH_SAMPLES),
         tts_active: None,
         tts_cancel: None,
         ptt_active: None,
@@ -100,20 +102,17 @@ pub async fn start_dictation(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 /// `stop_dictation` — stop the active dictation session.
+///
+/// The final transcript (if any) is emitted asynchronously by the forwarder
+/// task. The `dictation-state: stopped` event is emitted by the forwarder
+/// after all pending transcripts have been forwarded, ensuring the frontend
+/// receives the final text before the stopped signal.
 #[tauri::command]
 pub fn stop_dictation(state: State<'_, AppState>) -> Result<(), String> {
     stop_dictation_inner(&state);
-
-    // Emit state change to frontend.
-    if let Some(handle) = state
-        .app_handle
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .as_ref()
-    {
-        let _ = handle.emit(DICTATION_STATE_EVENT, "stopped");
-    }
-
+    // Note: `stopped` is emitted by the forwarder task after draining all
+    // pending transcripts — not here. This avoids a race where the frontend
+    // sees `stopped` before the final transcript arrives.
     Ok(())
 }
 
@@ -195,6 +194,10 @@ fn stop_dictation_inner(state: &AppState) {
 }
 
 /// Spawn an async task that reads transcribed text and emits Tauri events.
+///
+/// When the channel closes (engine stopped), the forwarder emits
+/// `dictation-state: stopped` so the frontend knows all pending transcripts
+/// have been delivered.
 fn spawn_dictation_forwarder(
     mut text_rx: tokio::sync::mpsc::Receiver<String>,
     app_handle: tauri::AppHandle,
@@ -208,5 +211,7 @@ fn spawn_dictation_forwarder(
                 break; // App window closed.
             }
         }
+        // All transcripts forwarded — signal the frontend that dictation is done.
+        let _ = app_handle.emit(DICTATION_STATE_EVENT, "stopped");
     });
 }

@@ -67,6 +67,7 @@ impl SttPipeline {
             model_dir,
             silence_flush_frames: DEFAULT_SILENCE_FLUSH_FRAMES,
             max_speech_samples: DEFAULT_MAX_SPEECH_SAMPLES,
+            partial_flush_samples: None,
             tts_active: Some(tts_active),
             tts_cancel,
             ptt_active,
