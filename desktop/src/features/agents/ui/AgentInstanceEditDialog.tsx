@@ -986,6 +986,7 @@ export function AgentInstanceEditDialog({
                       linkedPersona={linkedPersona}
                       mcpCommand={mcpCommand}
                       mcpToolsets={mcpToolsets}
+                      modelTuningRuntimeId={prospectiveRuntimeId}
                       parallelism={parallelism}
                       relayUrl={relayUrl}
                       requiredEnvKeys={requiredEnvKeys}
