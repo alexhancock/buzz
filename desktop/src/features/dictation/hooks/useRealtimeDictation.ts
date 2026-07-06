@@ -11,6 +11,7 @@ import {
   BUFFER_COMMITTED_EVENT,
   TRANSCRIPT_COMPLETED_EVENT,
   TRANSCRIPT_DELTA_EVENT,
+  commitAudioBuffer,
   connectPeerConnection,
   createAudioBufferCapture,
   createPeerConnection,
@@ -18,6 +19,7 @@ import {
   flushAudioBuffer,
   getTranscriptText,
   mergeTranscriptEvent,
+  requiresManualCommit,
 } from "../lib/realtimeAudio";
 
 interface UseRealtimeDictationOptions {
@@ -58,6 +60,8 @@ export function useRealtimeDictation({
     createTranscriptSegmentState(),
   );
   const activeRunIdRef = useRef(0);
+  const manualCommitRef = useRef(false);
+  const commitIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const onRecordingStartRef = useRef(onRecordingStart);
   const onTranscriptTextRef = useRef(onTranscriptText);
 
@@ -82,6 +86,45 @@ export function useRealtimeDictation({
   }, []);
 
   const cleanupResources = useCallback(() => {
+    // Clear periodic commit interval if active.
+    if (commitIntervalRef.current) {
+      clearInterval(commitIntervalRef.current);
+      commitIntervalRef.current = null;
+    }
+
+    // For manual-commit models (no server VAD), commit any buffered audio
+    // before tearing down the connection so OpenAI processes the final chunk.
+    // We keep the data channel open briefly to receive the transcript response.
+    const dc = dataChannelRef.current;
+    const needsCommit =
+      manualCommitRef.current && dc && dc.readyState === "open";
+    manualCommitRef.current = false;
+
+    if (needsCommit && dc) {
+      commitAudioBuffer(dc);
+      // Stop the mic immediately so no new audio is sent after commit.
+      for (const track of streamRef.current?.getTracks() ?? []) {
+        track.stop();
+      }
+      streamRef.current = null;
+      audioCaptureRef.current?.close();
+      audioCaptureRef.current = null;
+      // Delay full teardown to allow the final transcript to arrive.
+      const pc = peerConnectionRef.current;
+      peerConnectionRef.current = null;
+      dataChannelRef.current = null;
+      const runId = activeRunIdRef.current;
+      setTimeout(() => {
+        // Only tear down if no new run started in the meantime.
+        if (activeRunIdRef.current === runId) {
+          activeRunIdRef.current += 1;
+        }
+        dc.close();
+        pc?.close();
+      }, 3000);
+      return;
+    }
+
     activeRunIdRef.current += 1;
     closeResources({
       audioCapture: audioCaptureRef.current,
@@ -181,6 +224,7 @@ export function useRealtimeDictation({
         closeResources({ audioCapture, stream });
         return;
       }
+      manualCommitRef.current = requiresManualCommit(session.model);
 
       // 4. Set up WebRTC
       peerConnection = createPeerConnection();
@@ -203,6 +247,7 @@ export function useRealtimeDictation({
       // Flush buffered audio once data channel opens
       const channelToFlush = dataChannel;
       const captureToFlush = audioCapture;
+      const useManualCommit = manualCommitRef.current;
       dataChannel.addEventListener("open", () => {
         // If the user stopped (or restarted) recording between the SDP
         // exchange and the channel opening, drop this run's buffered audio.
@@ -211,6 +256,20 @@ export function useRealtimeDictation({
           return;
         }
         flushAudioBuffer(channelToFlush, captureToFlush.chunks);
+        // For manual-commit models, commit the initial buffered audio and
+        // start a periodic commit interval so streaming transcripts flow
+        // during recording (server VAD models commit automatically).
+        if (useManualCommit) {
+          commitAudioBuffer(channelToFlush);
+          // Commit every 2s to produce streaming transcript segments while
+          // the user is still speaking. Each commit triggers a transcription
+          // of the audio accumulated since the last commit.
+          commitIntervalRef.current = setInterval(() => {
+            if (channelToFlush.readyState === "open") {
+              commitAudioBuffer(channelToFlush);
+            }
+          }, 2000);
+        }
         captureToFlush.close();
         audioCaptureRef.current = null;
       });

@@ -235,3 +235,22 @@ export function flushAudioBuffer(
   }
   chunks.length = 0;
 }
+
+/**
+ * Send `input_audio_buffer.commit` to finalize buffered audio for transcription.
+ *
+ * Required when server VAD is disabled (e.g. `realtime-whisper` models) —
+ * without a commit, appended audio is never processed. For models using
+ * server VAD, the server commits automatically on speech boundaries.
+ */
+export function commitAudioBuffer(dataChannel: RTCDataChannel): void {
+  dataChannel.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+}
+
+/**
+ * Whether a transcription model requires manual audio commit (no server VAD).
+ * Models containing "realtime-whisper" use manual commit per OpenAI guidance.
+ */
+export function requiresManualCommit(model: string): boolean {
+  return model.includes("realtime-whisper");
+}

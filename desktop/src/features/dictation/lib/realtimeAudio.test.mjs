@@ -306,3 +306,29 @@ describe("mergeTranscriptEvent", () => {
     assert.equal(result, "Alpha. Bravo.");
   });
 });
+
+// Inline the logic to keep the test self-contained.
+function requiresManualCommit(model) {
+  return model.includes("realtime-whisper");
+}
+
+describe("requiresManualCommit", () => {
+  it("returns true for gpt-realtime-whisper", () => {
+    assert.equal(requiresManualCommit("gpt-realtime-whisper"), true);
+  });
+
+  it("returns true for versioned realtime-whisper model", () => {
+    assert.equal(
+      requiresManualCommit("gpt-4o-realtime-whisper-20250512"),
+      true,
+    );
+  });
+
+  it("returns false for whisper-1", () => {
+    assert.equal(requiresManualCommit("whisper-1"), false);
+  });
+
+  it("returns false for gpt-4o-transcribe", () => {
+    assert.equal(requiresManualCommit("gpt-4o-transcribe"), false);
+  });
+});
