@@ -71,16 +71,31 @@ export function useComposerDictation({
     }
   }, [disabled, dictation.isRecording, dictation.cancelRecording]);
 
-  // ⌘D global shortcut — dispatched from AppShell's keydown handler.
+  // ⌘D push-to-talk — hold to record, release to stop.
+  // Dispatched from AppShell's keydown/keyup handlers.
   useEffect(() => {
-    function handleToggle() {
-      dictation.toggleRecording();
+    function handleKeyDown() {
+      if (!dictation.isRecording && !dictation.isStarting) {
+        dictation.startRecording();
+      }
     }
-    window.addEventListener("buzz:toggle-dictation", handleToggle);
+    function handleKeyUp() {
+      if (dictation.isRecording || dictation.isStarting) {
+        dictation.stopRecording();
+      }
+    }
+    window.addEventListener("buzz:dictation-key-down", handleKeyDown);
+    window.addEventListener("buzz:dictation-key-up", handleKeyUp);
     return () => {
-      window.removeEventListener("buzz:toggle-dictation", handleToggle);
+      window.removeEventListener("buzz:dictation-key-down", handleKeyDown);
+      window.removeEventListener("buzz:dictation-key-up", handleKeyUp);
     };
-  }, [dictation.toggleRecording]);
+  }, [
+    dictation.isRecording,
+    dictation.isStarting,
+    dictation.startRecording,
+    dictation.stopRecording,
+  ]);
 
   return dictation;
 }

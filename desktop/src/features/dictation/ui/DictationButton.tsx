@@ -1,4 +1,4 @@
-import { Mic } from "lucide-react";
+import { Mic, Square } from "lucide-react";
 import { Button } from "@/shared/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { cn } from "@/shared/lib/cn";
@@ -51,7 +51,11 @@ export function DictationButton({
           type="button"
           variant={dictation.isRecording ? "default" : "ghost"}
         >
-          <Mic />
+          {dictation.isRecording ? (
+            <Square className="h-3.5 w-3.5 fill-current" />
+          ) : (
+            <Mic />
+          )}
         </Button>
       </TooltipTrigger>
       <TooltipContent>

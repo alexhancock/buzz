@@ -184,7 +184,7 @@ export const KEYBOARD_SHORTCUTS: KeyboardShortcut[] = [
   {
     id: "voice-dictation",
     label: "Voice Dictation",
-    description: "Start or stop voice dictation in the composer",
+    description: "Hold to dictate, release to stop (push-to-talk)",
     keys: "⌘D",
     keysWindows: "Ctrl+D",
     category: "Messages",
