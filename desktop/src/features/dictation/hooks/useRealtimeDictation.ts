@@ -102,6 +102,11 @@ export function useRealtimeDictation({
 
     if (needsCommit && dc) {
       commitAudioBuffer(dc);
+      // Mark the run stale immediately so late transcript events from the
+      // data channel are rejected by handleRealtimeEvent. This prevents
+      // transcripts from writing back into the composer after a send,
+      // edit-save, or navigation that triggered this cleanup.
+      activeRunIdRef.current += 1;
       // Stop the mic immediately so no new audio is sent after commit.
       for (const track of streamRef.current?.getTracks() ?? []) {
         track.stop();
@@ -109,16 +114,12 @@ export function useRealtimeDictation({
       streamRef.current = null;
       audioCaptureRef.current?.close();
       audioCaptureRef.current = null;
-      // Delay full teardown to allow the final transcript to arrive.
+      // Delay WebRTC teardown briefly for clean protocol shutdown (the
+      // commit message needs to reach OpenAI before the channel closes).
       const pc = peerConnectionRef.current;
       peerConnectionRef.current = null;
       dataChannelRef.current = null;
-      const runId = activeRunIdRef.current;
       setTimeout(() => {
-        // Only tear down if no new run started in the meantime.
-        if (activeRunIdRef.current === runId) {
-          activeRunIdRef.current += 1;
-        }
         dc.close();
         pc?.close();
       }, 3000);

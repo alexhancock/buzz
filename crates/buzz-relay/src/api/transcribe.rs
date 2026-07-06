@@ -187,18 +187,18 @@ async fn can_mint_session(
 fn build_session_payload(model: &str) -> Value {
     let uses_manual_commit = model.contains("realtime-whisper");
 
-    let mut audio_input = serde_json::json!({
-        "transcription": {
-            "model": model,
-        }
-    });
-
-    if !uses_manual_commit {
-        audio_input.as_object_mut().unwrap().insert(
-            "turn_detection".to_string(),
-            serde_json::json!({ "type": "server_vad" }),
-        );
-    }
+    let audio_input = if uses_manual_commit {
+        // Manual commit mode — omit turn_detection entirely.
+        serde_json::json!({
+            "transcription": { "model": model }
+        })
+    } else {
+        // Server VAD mode — include turn_detection.
+        serde_json::json!({
+            "transcription": { "model": model },
+            "turn_detection": { "type": "server_vad" }
+        })
+    };
 
     serde_json::json!({
         "session": {
