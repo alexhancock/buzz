@@ -208,15 +208,26 @@ export function useLocalDictation({
         return;
       }
 
+      // Unregister any lingering listeners from a previous session so they
+      // can't match the new session ID via the shared ref.
+      if (unlistenTranscriptRef.current) {
+        unlistenTranscriptRef.current();
+        unlistenTranscriptRef.current = null;
+      }
+      if (unlistenStateRef.current) {
+        unlistenStateRef.current();
+        unlistenStateRef.current = null;
+      }
+
       // 2. Listen for transcript events from the native layer.
-      // Each event includes a `session` ID so we can definitively ignore stale
-      // transcripts from a previous session's forwarder.
+      // Each listener captures `sessionId` by value (closure) so it only
+      // matches events from this specific session — immune to ref mutation.
       const unlistenTranscript = await listen<{
         text: string;
         session: number;
       }>(DICTATION_TRANSCRIPT_EVENT, (event) => {
         const { text, session } = event.payload;
-        if (session !== nativeSessionRef.current) return;
+        if (session !== sessionId) return;
         if (text) {
           onTranscriptTextRef.current(text);
         }
@@ -234,7 +245,7 @@ export function useLocalDictation({
         session: number;
       }>(DICTATION_STATE_EVENT, (event) => {
         const { state, session } = event.payload;
-        if (session !== nativeSessionRef.current) return;
+        if (session !== sessionId) return;
         if (state === "stopped") {
           setIsRecording(false);
           setIsTranscribing(false);
