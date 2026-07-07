@@ -149,8 +149,16 @@ export function useLocalDictation({
 
   const cleanup = useCallback(() => {
     // Flush any remaining audio before teardown, then stop the native engine.
+    // Scope the stop to THIS hook instance's session. `cleanup` runs as every
+    // instance's unmount handler, so an unscoped stop here would let a
+    // non-recording composer (e.g. a thread reply composer closing) tear down
+    // the singleton engine owned by another composer that is actively
+    // recording. `nativeSessionRef.current` is 0 for an instance that never
+    // started a session (native IDs start at 1), so its stop can never match
+    // the live session and correctly no-ops.
+    const stoppingSession = nativeSessionRef.current;
     void flushAudioBatch().then(() => {
-      invoke("stop_dictation").catch(() => {});
+      invoke("stop_dictation", { session: stoppingSession }).catch(() => {});
     });
     // Stop batch timer.
     if (batchTimerRef.current) {
@@ -212,7 +220,7 @@ export function useLocalDictation({
 
       // Bail if aborted during engine start.
       if (startAbortedRef.current) {
-        invoke("stop_dictation").catch(() => {});
+        invoke("stop_dictation", { session: sessionId }).catch(() => {});
         return;
       }
 
@@ -243,7 +251,7 @@ export function useLocalDictation({
       // Bail if stop/cancel was called while we were awaiting.
       if (startAbortedRef.current) {
         unlistenTranscript();
-        invoke("stop_dictation").catch(() => {});
+        invoke("stop_dictation", { session: sessionId }).catch(() => {});
         return;
       }
       unlistenTranscriptRef.current = unlistenTranscript;
@@ -272,7 +280,7 @@ export function useLocalDictation({
       if (startAbortedRef.current) {
         unlistenTranscript();
         unlistenState();
-        invoke("stop_dictation").catch(() => {});
+        invoke("stop_dictation", { session: sessionId }).catch(() => {});
         return;
       }
       unlistenStateRef.current = unlistenState;
@@ -291,7 +299,7 @@ export function useLocalDictation({
       if (startAbortedRef.current) {
         for (const track of stream.getTracks()) track.stop();
         streamRef.current = null;
-        invoke("stop_dictation").catch(() => {});
+        invoke("stop_dictation", { session: sessionId }).catch(() => {});
         return;
       }
 
@@ -332,7 +340,7 @@ export function useLocalDictation({
         streamRef.current = null;
         void audioContext.close();
         audioContextRef.current = null;
-        invoke("stop_dictation").catch(() => {});
+        invoke("stop_dictation", { session: sessionId }).catch(() => {});
         return;
       }
 
@@ -355,9 +363,10 @@ export function useLocalDictation({
       setIsRecording(true);
       setIsTranscribing(true);
     } catch (error) {
-      // Stop the native engine if it was started but a later step failed
-      // (e.g. mic permission denied, AudioWorklet setup error).
-      invoke("stop_dictation").catch(() => {});
+      // Tear down and stop the native engine if it was started but a later
+      // step failed (e.g. mic permission denied, AudioWorklet setup error).
+      // `cleanup()` performs the session-scoped stop, so it only tears down
+      // this instance's own session — never another composer's.
       cleanup();
       setIsRecording(false);
       setIsTranscribing(false);
@@ -429,8 +438,10 @@ export function useLocalDictation({
   const cancelRecording = useCallback(() => {
     // Signal any in-flight startRecording to bail after its next await.
     startAbortedRef.current = true;
+    // `cleanup()` performs the session-scoped native stop, so cancelling a
+    // composer that isn't the active recorder can't tear down another
+    // composer's session.
     cleanup();
-    invoke("stop_dictation").catch(() => {});
     setIsRecording(false);
     setIsTranscribing(false);
   }, [cleanup]);
