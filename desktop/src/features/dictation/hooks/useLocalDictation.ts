@@ -197,6 +197,15 @@ export function useLocalDictation({
   }, []);
 
   const cleanup = useCallback(() => {
+    // Abort any in-flight startRecording so it bails after its next await
+    // instead of resuming and opening the mic/worklet or leaving the native
+    // session/listeners running after teardown. `cleanup` is the unmount
+    // handler (and the catch-path teardown); without this, unmounting while
+    // startRecording awaits `start_dictation`/`listen`/`getUserMedia`/
+    // `addModule` would let the async start finish against a torn-down
+    // instance. A fresh startRecording clears this flag before its first
+    // await, so it never wrongly aborts a subsequent start.
+    startAbortedRef.current = true;
     // Flush any remaining audio before teardown, then stop the native engine.
     // Scope the stop to THIS hook instance's session. `cleanup` runs as every
     // instance's unmount handler, so an unscoped stop here would let a
