@@ -417,8 +417,12 @@ export function useLocalDictation({
     // Flush remaining audio and THEN stop the native engine, ensuring the
     // final batch arrives before the engine shuts down and flushes its buffer.
     // isTranscribing stays true — cleared when `dictation-state: stopped` arrives.
+    // Scope the stop to THIS session: if the user restarts during the flush
+    // window, a new session may already be stored by the time this resolves —
+    // passing the session keeps this stop from tearing down the new engine.
+    const stoppingSession = nativeSessionRef.current;
     void flushAudioBatch().then(() => {
-      invoke("stop_dictation").catch(() => {});
+      invoke("stop_dictation", { session: stoppingSession }).catch(() => {});
     });
   }, [flushAudioBatch]);
 

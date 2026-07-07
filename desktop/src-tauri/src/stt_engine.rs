@@ -344,6 +344,42 @@ fn stt_worker(
         }
     }
 
+    // ── Drain any audio still queued at shutdown ──────────────────────────────
+    // The caller flushes its final PCM batch (via `push_dictation_audio`) right
+    // before calling `stop_dictation`, which sets the shutdown flag. Without
+    // draining here, the loop above would break on the flag and skip that
+    // enqueued batch, so the tail of speech would never reach `speech_buf` and
+    // the final flush below would only transcribe older audio — dropping the
+    // last words. Process everything still in the channel before flushing.
+    while let Ok(bytes) = audio_rx.try_recv() {
+        let samples_48k = bytes_to_f32(&bytes);
+        input_buf_48k.extend_from_slice(&samples_48k);
+
+        while input_buf_48k.len() >= chunk_in {
+            let chunk: Vec<f32> = input_buf_48k.drain(..chunk_in).collect();
+            let resampled = resample_chunk(&mut resampler, &chunk);
+            process_16k_samples(
+                &resampled,
+                &mut leftover_16k,
+                &mut vad,
+                &mut speech_buf,
+                &mut silence_frames,
+                &mut in_speech,
+                &mut barge_in_frames,
+                &recognizer,
+                &text_tx,
+                has_tts,
+                &tts_active_flag,
+                tts_cancel_flag.as_deref(),
+                &mut tts_stopped_at,
+                ptt_active_flag.as_ref(),
+                config.silence_flush_frames,
+                config.max_speech_samples,
+                config.partial_flush_samples,
+            );
+        }
+    }
+
     // ── Final flush — transcribe any remaining speech on shutdown/disconnect ──
     if !speech_buf.is_empty() {
         flush_to_stt(&speech_buf, &recognizer, &text_tx);

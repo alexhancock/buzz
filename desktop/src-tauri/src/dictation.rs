@@ -69,7 +69,7 @@ pub async fn start_dictation(state: State<'_, AppState>) -> Result<u64, String> 
     let model_dir = models::stt_model_dir().ok_or("STT model directory not found")?;
 
     // Stop any existing dictation session first.
-    stop_dictation_inner(&state);
+    stop_dictation_inner(&state, None);
 
     let config = SttEngineConfig {
         model_dir,
@@ -119,9 +119,15 @@ pub async fn start_dictation(state: State<'_, AppState>) -> Result<u64, String> 
 /// task. The `dictation-state: stopped` event is emitted by the forwarder
 /// after all pending transcripts have been forwarded, ensuring the frontend
 /// receives the final text before the stopped signal.
+///
+/// `session` scopes the stop to a specific session: the engine is only torn
+/// down when the currently-stored `session_id` matches. This prevents a
+/// delayed/fire-and-forget stop from an old session (e.g. one deferred behind
+/// a final audio flush) from killing a *newer* session the user started in the
+/// meantime. Pass `None` for an unconditional stop (used on cancel/unmount).
 #[tauri::command]
-pub fn stop_dictation(state: State<'_, AppState>) -> Result<(), String> {
-    stop_dictation_inner(&state);
+pub fn stop_dictation(session: Option<u64>, state: State<'_, AppState>) -> Result<(), String> {
+    stop_dictation_inner(&state, session);
     // Note: `stopped` is emitted by the forwarder task after draining all
     // pending transcripts — not here. This avoids a race where the frontend
     // sees `stopped` before the final transcript arrives.
@@ -190,13 +196,18 @@ pub struct DictationStatus {
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-fn stop_dictation_inner(state: &AppState) {
+fn stop_dictation_inner(state: &AppState, session: Option<u64>) {
     let old_engine = {
         let mut ds = state
             .dictation_state
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        ds.engine.take()
+        // Session-scoped stop: only tear down when the requested session matches
+        // the one currently stored. A `None` session stops unconditionally.
+        match session {
+            Some(requested) if requested != ds.session_id => None,
+            _ => ds.engine.take(),
+        }
     };
     if let Some(engine) = old_engine {
         engine.shutdown();
