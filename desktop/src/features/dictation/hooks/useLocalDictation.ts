@@ -42,6 +42,16 @@ const MODEL_POLL_INTERVAL_MS = 5_000;
 const AUDIO_BATCH_MS = 100;
 
 /**
+ * Max samples per `push_dictation_audio` IPC call. The native command rejects
+ * any raw batch over 100 KB (`MAX_AUDIO_BATCH_BYTES` in `dictation.rs`); at
+ * 48 kHz f32 mono that is 25,600 samples (~0.53s). We chunk under that cap
+ * (24,000 samples / 96 KB, leaving headroom) so a stalled main thread that
+ * lets the batch grow past ~0.5s can't produce a single oversized buffer that
+ * native rejects and we silently drop. Chunks are sent in order.
+ */
+const MAX_IPC_SAMPLES = 24_000;
+
+/**
  * Local STT dictation hook using the Parakeet model via Tauri native commands.
  *
  * Works fully offline — no relay or OpenAI API key needed. Uses the same
@@ -137,14 +147,28 @@ export function useLocalDictation({
     }
     audioBatchRef.current = [];
 
-    const bytes = new Uint8Array(
-      merged.buffer,
-      merged.byteOffset,
-      merged.byteLength,
-    );
-    return invokeRawBinary("push_dictation_audio", bytes)
-      .then(() => {})
-      .catch(() => {});
+    // Split into chunks under the native IPC cap and send them in order.
+    // A single unbounded buffer can exceed the 100 KB native limit if the
+    // batch timer was delayed (e.g. main-thread stall), in which case native
+    // rejects it and the whole chunk is silently lost.
+    const sendChunks = async (): Promise<void> => {
+      for (let start = 0; start < merged.length; start += MAX_IPC_SAMPLES) {
+        const slice = merged.subarray(
+          start,
+          Math.min(start + MAX_IPC_SAMPLES, merged.length),
+        );
+        // Copy into a fresh, tightly-bound buffer so the raw IPC payload is
+        // exactly this chunk (a subarray view shares the parent's ArrayBuffer).
+        const chunk = new Uint8Array(
+          slice.buffer.slice(
+            slice.byteOffset,
+            slice.byteOffset + slice.byteLength,
+          ),
+        );
+        await invokeRawBinary("push_dictation_audio", chunk).catch(() => {});
+      }
+    };
+    return sendChunks();
   }, []);
 
   const cleanup = useCallback(() => {
@@ -306,6 +330,14 @@ export function useLocalDictation({
       // 4. Set up AudioWorklet to send PCM to native layer.
       const audioContext = new AudioContext({ sampleRate: 48000 });
       audioContextRef.current = audioContext;
+
+      // Resume if the WebView created the context suspended (autoplay policy).
+      // A suspended context never pulls the worklet's `process()`, so no PCM
+      // would reach `push_dictation_audio` while the UI shows an active
+      // recording. Mirrors the huddle capture path (`huddle/lib/audioWorklet.ts`).
+      if (audioContext.state === "suspended") {
+        await audioContext.resume();
+      }
 
       // Create a processor that accumulates audio frames and posts them
       // to the main thread. Batching happens on the main thread side via
