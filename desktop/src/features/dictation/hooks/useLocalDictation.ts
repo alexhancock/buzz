@@ -164,11 +164,16 @@ export function useLocalDictation({
       }
       streamRef.current = null;
     }
-    // Disconnect audio worklet.
+    // Disconnect audio worklet. Clear the port handler first so any PCM
+    // messages still queued on the main thread are dropped instead of
+    // appended to the (reused) audio batch.
     if (workletRef.current) {
+      workletRef.current.port.onmessage = null;
       workletRef.current.disconnect();
       workletRef.current = null;
     }
+    // Drop any audio still buffered so it can't leak into the next session.
+    audioBatchRef.current = [];
     // Close audio context.
     if (audioContextRef.current) {
       void audioContextRef.current.close();
@@ -193,6 +198,9 @@ export function useLocalDictation({
 
     // Clear abort flag for this new start attempt.
     startAbortedRef.current = false;
+    // Reset any leftover audio buffer so a stale batch from a prior session
+    // can't be flushed into this new session/draft.
+    audioBatchRef.current = [];
 
     setIsStarting(true);
     onRecordingStartRef.current?.();
@@ -316,6 +324,18 @@ export function useLocalDictation({
         URL.revokeObjectURL(blobUrl);
       }
 
+      // Bail if stop/cancel was called while the worklet module was loading.
+      // Without this the worklet/flush timer would start and `isRecording`
+      // would be set true, leaving dictation running after it was stopped.
+      if (startAbortedRef.current) {
+        for (const track of stream.getTracks()) track.stop();
+        streamRef.current = null;
+        void audioContext.close();
+        audioContextRef.current = null;
+        invoke("stop_dictation").catch(() => {});
+        return;
+      }
+
       const source = audioContext.createMediaStreamSource(stream);
       const worklet = new AudioWorkletNode(audioContext, "dictation-processor");
       workletRef.current = worklet;
@@ -382,6 +402,10 @@ export function useLocalDictation({
       streamRef.current = null;
     }
     if (workletRef.current) {
+      // Clear the port handler so PCM messages still queued on the main
+      // thread are dropped rather than appended to the batch after the
+      // final flush below (and leaking into the next session).
+      workletRef.current.port.onmessage = null;
       workletRef.current.disconnect();
       workletRef.current = null;
     }
