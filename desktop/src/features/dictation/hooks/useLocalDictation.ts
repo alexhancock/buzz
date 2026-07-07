@@ -43,13 +43,21 @@ const AUDIO_BATCH_MS = 100;
 
 /**
  * Max samples per `push_dictation_audio` IPC call. The native command rejects
- * any raw batch over 100 KB (`MAX_AUDIO_BATCH_BYTES` in `dictation.rs`); at
- * 48 kHz f32 mono that is 25,600 samples (~0.53s). We chunk under that cap
+ * any raw audio payload over 100 KB (`MAX_AUDIO_BATCH_BYTES` in `dictation.rs`);
+ * at 48 kHz f32 mono that is 25,600 samples (~0.53s). We chunk under that cap
  * (24,000 samples / 96 KB, leaving headroom) so a stalled main thread that
  * lets the batch grow past ~0.5s can't produce a single oversized buffer that
  * native rejects and we silently drop. Chunks are sent in order.
  */
 const MAX_IPC_SAMPLES = 24_000;
+
+/**
+ * Size (bytes) of the little-endian `u64` session header prepended to each
+ * `push_dictation_audio` payload. Native reads this header and only feeds audio
+ * whose session matches the currently-active one, so late chunks from a
+ * just-stopped session can't leak into a newer session's transcript.
+ */
+const SESSION_HEADER_BYTES = 8;
 
 /**
  * Local STT dictation hook using the Parakeet model via Tauri native commands.
@@ -134,6 +142,12 @@ export function useLocalDictation({
     const batch = audioBatchRef.current;
     if (batch.length === 0) return Promise.resolve();
 
+    // Tag this flush with the session that owns the buffered audio. Captured
+    // once here so every chunk of this batch carries the same session; native
+    // drops chunks whose session no longer matches the active one, so a late
+    // flush from a just-stopped session can't leak into a newer session.
+    const session = nativeSessionRef.current;
+
     // Calculate total byte length and merge into a single buffer.
     let totalSamples = 0;
     for (const chunk of batch) {
@@ -157,15 +171,26 @@ export function useLocalDictation({
           start,
           Math.min(start + MAX_IPC_SAMPLES, merged.length),
         );
-        // Copy into a fresh, tightly-bound buffer so the raw IPC payload is
-        // exactly this chunk (a subarray view shares the parent's ArrayBuffer).
-        const chunk = new Uint8Array(
-          slice.buffer.slice(
-            slice.byteOffset,
-            slice.byteOffset + slice.byteLength,
-          ),
+        // Build the IPC payload: an 8-byte LE u64 session header followed by
+        // the audio bytes. Copy the slice into the header-prefixed buffer so
+        // the raw payload is exactly this chunk (a subarray view shares the
+        // parent's ArrayBuffer).
+        const payload = new Uint8Array(SESSION_HEADER_BYTES + slice.byteLength);
+        new DataView(payload.buffer).setBigUint64(
+          0,
+          BigInt(session),
+          true, // little-endian
         );
-        await invokeRawBinary("push_dictation_audio", chunk).catch(() => {});
+        payload.set(
+          new Uint8Array(
+            slice.buffer.slice(
+              slice.byteOffset,
+              slice.byteOffset + slice.byteLength,
+            ),
+          ),
+          SESSION_HEADER_BYTES,
+        );
+        await invokeRawBinary("push_dictation_audio", payload).catch(() => {});
       }
     };
     return sendChunks();

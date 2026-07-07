@@ -136,31 +136,59 @@ pub fn stop_dictation(session: Option<u64>, state: State<'_, AppState>) -> Resul
 
 /// `push_dictation_audio` — feed raw PCM bytes into the dictation pipeline.
 ///
-/// Expects a raw binary body of f32 LE samples at 48 kHz mono.
-/// If no dictation session is active, the bytes are silently discarded.
+/// Expects a raw binary body: an 8-byte little-endian `u64` session header
+/// followed by f32 LE samples at 48 kHz mono. The header scopes the push to a
+/// specific session — bytes are only fed to the engine when the header matches
+/// the currently-stored `session_id`. This prevents late audio from a
+/// just-stopped session (whose final `flushAudioBatch()` chunks are still
+/// arriving) from being accepted by a *newer* session the user started in the
+/// meantime and transcribed into the new draft.
+///
+/// If no dictation session is active, or the session header doesn't match the
+/// active session, the bytes are silently discarded.
 #[tauri::command]
 pub fn push_dictation_audio(
     request: tauri::ipc::Request<'_>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    /// Maximum IPC audio batch size: 100 KB.
+    /// Size of the leading little-endian `u64` session header.
+    const SESSION_HEADER_BYTES: usize = 8;
+    /// Maximum IPC audio batch size (audio payload only, excluding the header): 100 KB.
     const MAX_AUDIO_BATCH_BYTES: usize = 100 * 1024;
 
     match request.body() {
         tauri::ipc::InvokeBody::Raw(bytes) => {
-            if bytes.len() > MAX_AUDIO_BATCH_BYTES {
+            if bytes.len() < SESSION_HEADER_BYTES {
+                return Err(format!(
+                    "audio batch too small: {} bytes (need at least {} for session header)",
+                    bytes.len(),
+                    SESSION_HEADER_BYTES
+                ));
+            }
+            let (header, audio) = bytes.split_at(SESSION_HEADER_BYTES);
+            if audio.len() > MAX_AUDIO_BATCH_BYTES {
                 return Err(format!(
                     "audio batch too large: {} bytes (max {})",
-                    bytes.len(),
+                    audio.len(),
                     MAX_AUDIO_BATCH_BYTES
                 ));
             }
+            // `split_at` guarantees `header` is exactly `SESSION_HEADER_BYTES` long.
+            let session = u64::from_le_bytes(
+                header
+                    .try_into()
+                    .map_err(|_| "invalid session header".to_string())?,
+            );
             let ds = state
                 .dictation_state
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            if let Some(ref engine) = ds.engine {
-                engine.push_audio(bytes.to_vec())?;
+            // Only feed audio tagged with the currently-active session. Late
+            // chunks from an old session are silently dropped.
+            if session == ds.session_id {
+                if let Some(ref engine) = ds.engine {
+                    engine.push_audio(audio.to_vec())?;
+                }
             }
             Ok(())
         }
