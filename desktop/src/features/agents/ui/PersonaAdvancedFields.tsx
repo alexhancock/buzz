@@ -1,6 +1,8 @@
 import { Input } from "@/shared/ui/input";
 import { cn } from "@/shared/lib/cn";
 import { EnvVarsEditor, type EnvVarsValue } from "./EnvVarsEditor";
+import { isBuzzAgentRuntime } from "./buzzAgentConfig";
+import { BuzzAgentModelTuningFields } from "./CreateAgentDialogSections";
 import {
   PERSONA_FIELD_CONTROL_CLASS,
   PERSONA_FIELD_SHELL_CLASS,
@@ -12,6 +14,8 @@ const PERSONA_LABEL_OPTIONAL_CLASS =
 export function PersonaAdvancedFields({
   disabled,
   envVars,
+  inheritedEnvVars = {},
+  modelTuningRuntimeId = "",
   namePoolText,
   onEnvVarsChange,
   onNamePoolTextChange,
@@ -20,6 +24,11 @@ export function PersonaAdvancedFields({
 }: {
   disabled: boolean;
   envVars: EnvVarsValue;
+  /** Env vars to display as inherited defaults in tuning-field placeholders.
+   *  For templates, pass `globalConfig.env_vars` (the fallback layer). */
+  inheritedEnvVars?: EnvVarsValue;
+  /** Runtime id for the buzz-agent tuning knobs visibility gate. */
+  modelTuningRuntimeId?: string;
   namePoolText: string;
   onEnvVarsChange: (value: EnvVarsValue) => void;
   onNamePoolTextChange: (value: string) => void;
@@ -66,6 +75,23 @@ export function PersonaAdvancedFields({
         requiredKeys={requiredEnvKeys}
         value={envVars}
       />
+
+      {/* Tier-1 buzz-agent model-tuning knobs — only shown for buzz-agent. */}
+      {isBuzzAgentRuntime(modelTuningRuntimeId) ? (
+        <BuzzAgentModelTuningFields
+          envVars={envVars}
+          inheritedEnvVars={inheritedEnvVars}
+          onEnvVarChange={(key, value) => {
+            const next = { ...envVars };
+            if (value === "") {
+              delete next[key];
+            } else {
+              next[key] = value;
+            }
+            onEnvVarsChange(next);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
