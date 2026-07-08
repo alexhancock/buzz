@@ -138,7 +138,8 @@ const overrides = new Map([
   // baked-env-required-badge: getBakedBuildEnvKeys wrapper adds ~16 lines. Queued to split.
   // restart-badge: started the queued split — start/stopManagedAgent moved to
   // tauriManagedAgents.ts; limit ratcheted down 1388 → 1380 to bank the headroom.
-  ["src/shared/api/tauri.ts", 1380],
+  // baked-env fold-in: getBakedBuildEnv + BakedEnvEntry type adds ~28 lines.
+  ["src/shared/api/tauri.ts", 1410],
   // readiness-gate: PersonaDialog.tsx threads computeLocalModeGate +
   // requiredCredentialEnvKeys + RequiredFieldLabel so the "New agent" dialog
   // shows required markers and credential amber rows (parity with
