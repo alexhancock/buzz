@@ -57,6 +57,7 @@ import {
 } from "./personaProviderModelFields";
 import { usePersonaModelDiscovery } from "./usePersonaModelDiscovery";
 import { useGlobalAgentConfig } from "@/features/agents/useGlobalAgentConfig";
+import { isBuzzAgentRuntime } from "./buzzAgentConfig";
 
 export function CreateAgentDialog({
   open,
@@ -313,6 +314,25 @@ export function CreateAgentDialog({
       setShowAdvanced(true);
     }
   }, [open, requiredEnvKeys.length]);
+
+  // Auto-open the Advanced section for buzz-agent runtimes so the model-tuning
+  // knobs are reachable even when no required key is missing.
+  // Fires once per dialog-open cycle; does not re-open if the user manually
+  // collapses the section afterward.
+  const hasAutoOpenedForBuzzAgentRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!open) {
+      hasAutoOpenedForBuzzAgentRef.current = false;
+      return;
+    }
+    if (
+      isBuzzAgentRuntime(selectedRuntimeId) &&
+      !hasAutoOpenedForBuzzAgentRef.current
+    ) {
+      hasAutoOpenedForBuzzAgentRef.current = true;
+      setShowAdvanced(true);
+    }
+  }, [open, selectedRuntimeId]);
 
   // Probe the backend provider when runOn changes to a non-local value
   React.useEffect(() => {
@@ -747,6 +767,7 @@ export function CreateAgentDialog({
               <AgentModelField
                 disabled={createMutation.isPending}
                 discoveredModelOptions={discoveredModelOptions}
+                globalModel={globalConfig.model ?? ""}
                 isCustomModelEditing={isCustomModelEditing}
                 isRequired={true}
                 model={model}

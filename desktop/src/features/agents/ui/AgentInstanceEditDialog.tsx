@@ -27,6 +27,7 @@ import {
   CUSTOM_MODEL_DROPDOWN_VALUE,
   CUSTOM_PROVIDER_DROPDOWN_VALUE,
   formatRuntimeOptionLabel,
+  getDefaultLlmModelLabel,
   getModelSelectValue,
   getPersonaProviderOptions,
   hasPersonaModelOption,
@@ -63,6 +64,7 @@ import {
   usePersonaModelDiscovery,
 } from "./usePersonaModelDiscovery";
 import { useGlobalAgentConfig } from "@/features/agents/useGlobalAgentConfig";
+import { isBuzzAgentRuntime } from "./buzzAgentConfig";
 
 const ADVANCED_FIELDS_MOTION_TRANSITION = {
   duration: 0.18,
@@ -362,9 +364,13 @@ export function AgentInstanceEditDialog({
     ],
   );
 
+  const { globalConfig } = useGlobalAgentConfig();
+
   // Runtime/provider-required credential state, derived from the PROSPECTIVE
   // post-submit runtime — see the hook for the inherit-transition and
   // Advanced-auto-expand rationale.
+  // Pass globalProvider so the hook uses it as a fallback when the per-agent
+  // provider is empty (global-provider-only configs must surface required keys).
   const {
     requiredEnvKeys: requiredEnvKeysRaw,
     fileSatisfiedEnvKeys,
@@ -373,6 +379,7 @@ export function AgentInstanceEditDialog({
     open,
     prospectiveRuntimeId,
     provider: inheritedSubmission.provider ?? "",
+    globalProvider: globalConfig.provider ?? "",
     envVars: inheritedSubmission.envVars,
     setShowAdvancedFields,
   });
@@ -390,8 +397,6 @@ export function AgentInstanceEditDialog({
     selectedRuntime,
   });
 
-  const { globalConfig } = useGlobalAgentConfig();
-
   // Filter out keys already satisfied by global defaults — they should not
   // render as amber required rows; they appear as inherited hints instead.
   const requiredEnvKeys = React.useMemo(
@@ -408,6 +413,25 @@ export function AgentInstanceEditDialog({
   const inheritedWithGlobal = React.useMemo(() => {
     return { ...globalConfig.env_vars, ...inheritedEnvVars };
   }, [globalConfig.env_vars, inheritedEnvVars]);
+
+  // Auto-expand Advanced whenever the prospective runtime is buzz-agent so the
+  // model-tuning knobs are reachable even when no required key is missing.
+  // Fires once per dialog-open cycle; does not re-open if the user manually
+  // collapses the section afterward.
+  const hasAutoOpenedForBuzzAgentRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!open) {
+      hasAutoOpenedForBuzzAgentRef.current = false;
+      return;
+    }
+    if (
+      isBuzzAgentRuntime(prospectiveRuntimeId) &&
+      !hasAutoOpenedForBuzzAgentRef.current
+    ) {
+      hasAutoOpenedForBuzzAgentRef.current = true;
+      setShowAdvancedFields(true);
+    }
+  }, [open, prospectiveRuntimeId]);
 
   // Clear model when provider scope changes and current model is no longer valid.
   React.useEffect(() => {
@@ -700,7 +724,7 @@ export function AgentInstanceEditDialog({
   // Model field derived state
   const trimmedModel = model.trim();
   const staticModelOptions: readonly PersonaModelOption[] = [
-    { id: "", label: "Default model" },
+    { id: "", label: getDefaultLlmModelLabel(globalConfig.model ?? "") },
   ];
   const effectiveModelOptions = discoveredModelOptions ?? staticModelOptions;
   const isModelCustom = !hasPersonaModelOption(
