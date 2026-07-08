@@ -255,7 +255,10 @@ const overrides = new Map([
   // + mount-only useEffect for the Drafts-panel "Send message" confirm-dialog
   // flow. Load-bearing feature growth; queued to split with the rest of this
   // list.
-  ["src/features/messages/ui/MessageComposer.tsx", 1033],
+  // +15 local-dictation integration: useLocalDictation wiring (mic toggle,
+  // transcript-append handler, recording/transcribing state, stop-on-send/edit
+  // guards). Load-bearing feature growth; queued to split with the rest.
+  ["src/features/messages/ui/MessageComposer.tsx", 1049],
 ]);
 
 await runFileSizeCheck({

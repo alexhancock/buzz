@@ -84,6 +84,10 @@ export function useLocalDictation({
   const workletRef = useRef<AudioWorkletNode | null>(null);
   const batchTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const audioBatchRef = useRef<Float32Array[]>([]);
+  // Tail of the serialized flush chain. Each flush appends its IPC work to
+  // this promise so flushes run strictly one-after-another; awaiting the tail
+  // guarantees every already-started flush's chunks are enqueued native-side.
+  const flushChainRef = useRef<Promise<void>>(Promise.resolve());
   const unlistenTranscriptRef = useRef<UnlistenFn | null>(null);
   const unlistenStateRef = useRef<UnlistenFn | null>(null);
   const onRecordingStartRef = useRef(onRecordingStart);
@@ -137,10 +141,17 @@ export function useLocalDictation({
   }, []);
 
   /** Flush accumulated audio batch to the native STT engine. Returns a promise
-   *  that resolves once the IPC call completes (or immediately if nothing to flush). */
+   *  that resolves once the IPC call completes (or immediately if nothing to flush).
+   *
+   *  Flushes are serialized through `flushChainRef`: the batch is drained
+   *  synchronously here (so each flush owns a distinct set of samples in FIFO
+   *  order), but the actual IPC send is chained after any prior in-flight
+   *  flush. This keeps chunks strictly ordered and lets `stopRecording`/
+   *  `cleanup` await the chain tail so an earlier timer-tick flush can't still
+   *  be enqueuing chunks when `stop_dictation` fires. */
   const flushAudioBatch = useCallback((): Promise<void> => {
     const batch = audioBatchRef.current;
-    if (batch.length === 0) return Promise.resolve();
+    if (batch.length === 0) return flushChainRef.current;
 
     // Tag this flush with the session that owns the buffered audio. Captured
     // once here so every chunk of this batch carries the same session; native
@@ -148,7 +159,10 @@ export function useLocalDictation({
     // flush from a just-stopped session can't leak into a newer session.
     const session = nativeSessionRef.current;
 
-    // Calculate total byte length and merge into a single buffer.
+    // Calculate total byte length and merge into a single buffer. Drain the
+    // batch synchronously so a concurrent timer tick can't grab the same
+    // samples — the merged buffer captured here is this flush's exclusive
+    // payload.
     let totalSamples = 0;
     for (const chunk of batch) {
       totalSamples += chunk.length;
@@ -193,7 +207,12 @@ export function useLocalDictation({
         await invokeRawBinary("push_dictation_audio", payload).catch(() => {});
       }
     };
-    return sendChunks();
+
+    // Chain this flush's IPC work after any prior in-flight flush so chunks
+    // stay strictly ordered and awaiting the tail drains everything.
+    const chained = flushChainRef.current.then(sendChunks);
+    flushChainRef.current = chained;
+    return chained;
   }, []);
 
   const cleanup = useCallback(() => {
@@ -267,6 +286,9 @@ export function useLocalDictation({
     // Reset any leftover audio buffer so a stale batch from a prior session
     // can't be flushed into this new session/draft.
     audioBatchRef.current = [];
+    // Reset the flush chain so this session's flushes don't chain behind a
+    // prior session's (already-settled) tail.
+    flushChainRef.current = Promise.resolve();
 
     setIsStarting(true);
     onRecordingStartRef.current?.();
