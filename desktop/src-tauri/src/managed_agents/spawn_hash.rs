@@ -31,6 +31,7 @@ use super::{
     persona_events::persona_snapshot_with_agent_config_fallback,
     resolve_effective_agent_env,
     types::{ManagedAgentRecord, PersonaRecord},
+    GlobalAgentConfig,
 };
 
 /// Digest the effective spawn configuration of `record` under the current
@@ -40,6 +41,7 @@ pub(crate) fn spawn_config_hash(
     record: &ManagedAgentRecord,
     personas: &[PersonaRecord],
     workspace_relay: &str,
+    global: &GlobalAgentConfig,
 ) -> u64 {
     // Prospective re-snapshot: mirror the mutation start/restore apply to the
     // record right before spawning, so the hash covers what a restart would
@@ -70,7 +72,7 @@ pub(crate) fn spawn_config_hash(
 
     let effective_command = crate::managed_agents::record_agent_command(record, personas);
     let runtime_meta = known_acp_runtime(&effective_command);
-    let effective = resolve_effective_agent_env(record, personas, runtime_meta);
+    let effective = resolve_effective_agent_env(record, personas, runtime_meta, global);
 
     let mut hasher = DefaultHasher::new();
 
