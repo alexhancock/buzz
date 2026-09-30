@@ -8,6 +8,7 @@ mod acp;
 mod config;
 mod engram_fetch;
 mod filter;
+pub mod ifc;
 mod isolated_execution;
 mod observer;
 mod pool;

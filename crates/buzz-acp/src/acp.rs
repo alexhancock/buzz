@@ -205,6 +205,10 @@ pub struct AcpClient {
     /// a JSON-RPC *success*, not `-32601` — which the main loop would read as
     /// a delivered steer and drop the user's message from the queue.
     steering_supported: bool,
+
+    /// Client-side information-flow control. Off unless `BUZZ_ACP_IFC=1`, in
+    /// which case every tool call is gated on the permission handshake.
+    ifc: crate::ifc::Ifc,
     /// Per-turn channel for receiving goose-native non-cancelling steer
     /// requests from the main loop. Installed by
     /// [`install_steer_rx`](Self::install_steer_rx) at dispatch and
@@ -617,6 +621,7 @@ impl AcpClient {
             observer_context: ObserverContext::default(),
             active_run_id: None,
             steering_supported: false,
+            ifc: crate::ifc::Ifc::from_env(),
             steer_rx: None,
             goose_usage: UsageTracker::default(),
             standard_usage: StandardUsageTracker::default(),
@@ -675,6 +680,20 @@ impl AcpClient {
             .pointer("/_meta/steering/supported")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        // Does the agent honor the IFC hide directive? Flow gating works either
+        // way; hiding is the one part that needs the agent's cooperation.
+        let honors_hide = result
+            .pointer("/agentCapabilities/_meta/goose/ifc/hideDirective")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        self.ifc.set_agent_honors_hide(honors_hide);
+        if self.ifc.is_enabled() {
+            tracing::info!(
+                target: "buzz_acp",
+                "information-flow control enabled; agent {} the hide directive",
+                if honors_hide { "honors" } else { "does NOT honor" }
+            );
+        }
         tracing::debug!(target: "acp::init", "initialize response: {result}");
         Ok(result)
     }
@@ -2015,6 +2034,93 @@ impl AcpClient {
             "session/request_permission id={id}, {} options",
             options.len()
         );
+
+        // Client-side IFC gate. This is the whole enforcement point: the client
+        // decides, and the agent only learns the outcome.
+        if self.ifc.is_enabled() {
+            let session_id = msg["params"]["sessionId"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            // `toolCall.title` is humanized for display, so prefer the explicit
+            // name when the agent provides one.
+            let tool_name = msg
+                .pointer("/params/_meta/goose/toolName")
+                .and_then(|v| v.as_str())
+                .or_else(|| {
+                    msg.pointer("/params/toolCall/title")
+                        .and_then(|v| v.as_str())
+                })
+                .unwrap_or("unknown")
+                .to_string();
+            let arguments = msg
+                .pointer("/params/toolCall/rawInput")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+
+            let decision = self.ifc.decide(&session_id, &tool_name, &arguments);
+            let find = |kind: &str| {
+                options
+                    .iter()
+                    .find(|opt| opt.get("kind").and_then(|k| k.as_str()) == Some(kind))
+                    .and_then(|opt| opt["optionId"].as_str())
+                    .map(ToOwned::to_owned)
+            };
+
+            match decision {
+                crate::ifc::Decision::Block { because } => {
+                    tracing::warn!(
+                        target: "buzz_acp",
+                        "ifc BLOCKED {tool_name}: {because}"
+                    );
+                    self.observe(
+                        "ifc_blocked",
+                        serde_json::json!({ "tool": tool_name, "reason": because }),
+                    );
+                    let option_id = find("reject_once")
+                        .ok_or_else(|| AcpError::Protocol("no reject_once option".into()))?;
+                    let response = permission_response_selected(&id, &option_id);
+                    self.write_ndjson(&response).await?;
+                    self.permission_responded = true;
+                    self.pending_permission_id = None;
+                    return Ok(());
+                }
+                crate::ifc::Decision::Hide { hide_ref, because } => {
+                    tracing::info!(
+                        target: "buzz_acp",
+                        "ifc HIDDEN {tool_name} as {hide_ref}: {because}"
+                    );
+                    self.observe(
+                        "ifc_hidden",
+                        serde_json::json!({
+                            "tool": tool_name,
+                            "ref": hide_ref,
+                            "reason": because,
+                        }),
+                    );
+                    let option_id = find("allow_once")
+                        .ok_or_else(|| AcpError::Protocol("no allow_once option".into()))?;
+                    let mut response = permission_response_selected(&id, &option_id);
+                    response["result"]["_meta"] =
+                        serde_json::json!({ "ifc": { "hide": true, "ref": hide_ref } });
+                    self.write_ndjson(&response).await?;
+                    self.permission_responded = true;
+                    self.pending_permission_id = None;
+                    return Ok(());
+                }
+                crate::ifc::Decision::Allow { because } => {
+                    tracing::info!(
+                        target: "buzz_acp",
+                        "ifc ALLOWED {tool_name}: {because}"
+                    );
+                    self.observe(
+                        "ifc_allowed",
+                        serde_json::json!({ "tool": tool_name, "reason": because }),
+                    );
+                    // Fall through to the normal auto-approval below.
+                }
+            }
+        }
 
         // Find allow_once by kind — NEVER hardcode optionId.
         let allow_once = options

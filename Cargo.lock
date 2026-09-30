@@ -962,6 +962,7 @@ dependencies = [
  "git-sign-nostr",
  "hex",
  "httparse",
+ "ifc-core",
  "nix 0.31.3",
  "nostr 0.44.7",
  "reqwest 0.13.4",
