@@ -334,6 +334,139 @@ impl Display for EgressError {
 
 impl Error for EgressError {}
 
+/// Whether information originated somewhere an adversary could have written.
+///
+/// This is the other half of the product lattice: confidentiality says who may
+/// *learn* a value, integrity says whether a value may be allowed to *decide*
+/// anything. They are independent. A user's own password is confidential and
+/// trusted; a stranger's email is public and untrusted.
+///
+/// `Trusted` is the privileged end. Information may always be treated as less
+/// trustworthy than it is, never as more, so a computation combining inputs is
+/// trusted only when every input was.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Integrity {
+    /// Written only by the user or the system acting on their behalf.
+    #[default]
+    Trusted,
+    /// Could have been authored by an adversary.
+    Untrusted,
+}
+
+impl Integrity {
+    /// Combine the trustworthiness of two contributing inputs.
+    ///
+    /// One untrusted input is enough to make the result untrusted, so this is
+    /// the lattice's least upper bound in the direction taint travels.
+    pub fn join(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Trusted, Self::Trusted) => Self::Trusted,
+            _ => Self::Untrusted,
+        }
+    }
+
+    pub fn is_trusted(self) -> bool {
+        matches!(self, Self::Trusted)
+    }
+}
+
+impl Display for Integrity {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Trusted => formatter.write_str("trusted"),
+            Self::Untrusted => formatter.write_str("untrusted"),
+        }
+    }
+}
+
+/// Monotonic integrity of one context — a conversation, a plan, a planner's
+/// working memory.
+///
+/// Where [`FlowState`] accumulates the labels of data a computation has *read*,
+/// this accumulates the trustworthiness of everything that has *influenced* it.
+/// The distinction matters because the two are checked against different things:
+/// accumulated confidentiality is checked against a destination, while
+/// accumulated integrity is checked against nothing at all. It is a property of
+/// the context alone, which is why [`check_trusted_action`] takes no argument.
+///
+/// Like `FlowState`, this is deliberately not cloneable: a caller must not keep
+/// a pristine copy and later use it to pretend the context never read the email.
+///
+/// ```
+/// use ifc_core::{Integrity, IntegrityState};
+///
+/// let mut context = IntegrityState::default();
+/// // Nothing has influenced the context yet, so a consequential action is fine.
+/// assert!(context.check_trusted_action().is_ok());
+///
+/// // An adversary's text enters the context.
+/// context.observe(Integrity::Untrusted);
+///
+/// // Now no consequential action may be taken on its say-so, whatever its
+/// // arguments look like.
+/// assert!(context.check_trusted_action().is_err());
+///
+/// // And trusted input afterwards cannot wash it out.
+/// context.observe(Integrity::Trusted);
+/// assert!(context.check_trusted_action().is_err());
+/// ```
+///
+/// ```compile_fail
+/// let state = ifc_core::IntegrityState::default();
+/// let _clean_copy = state.clone();
+/// ```
+#[derive(Debug, Default, Eq, PartialEq)]
+pub struct IntegrityState {
+    integrity: Integrity,
+}
+
+impl IntegrityState {
+    /// Record input that has influenced this context.
+    pub fn observe(&mut self, label: Integrity) {
+        self.integrity = self.integrity.join(label);
+    }
+
+    /// The trustworthiness of everything that has influenced this context.
+    pub fn integrity(&self) -> Integrity {
+        self.integrity
+    }
+
+    /// The trusted-action policy (P-T): a consequential action may proceed only
+    /// if the context that chose it was untainted by adversarial input.
+    ///
+    /// Note what is absent: the action's arguments. P-T is a claim about who
+    /// decided to act, not about what is being sent. Forwarding an untrusted
+    /// email body to its intended recipient satisfies P-T, because the user
+    /// asked for it; scheduling a payment named in that email does not, because
+    /// the email asked for it.
+    pub fn check_trusted_action(&self) -> Result<(), IntegrityError> {
+        if self.integrity.is_trusted() {
+            Ok(())
+        } else {
+            Err(IntegrityError::UntrustedContext)
+        }
+    }
+}
+
+/// Why a consequential action may not proceed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IntegrityError {
+    /// Adversarial input had entered the context that chose the action.
+    UntrustedContext,
+}
+
+impl Display for IntegrityError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UntrustedContext => {
+                formatter.write_str("action was chosen in an untrusted context")
+            }
+        }
+    }
+}
+
+impl Error for IntegrityError {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -503,5 +636,88 @@ mod tests {
             state.check_egress(&label(0b0001)),
             Err(EgressError::UnresolvedInput)
         );
+    }
+
+    #[test]
+    fn integrity_join_is_untrusted_unless_every_input_is_trusted() {
+        use Integrity::{Trusted, Untrusted};
+
+        assert_eq!(Trusted.join(Trusted), Trusted);
+        assert_eq!(Trusted.join(Untrusted), Untrusted);
+        assert_eq!(Untrusted.join(Trusted), Untrusted);
+        assert_eq!(Untrusted.join(Untrusted), Untrusted);
+    }
+
+    /// The property that makes P-T worth anything: taint cannot be laundered.
+    /// An attacker who gets one untrusted byte into a context must not be able
+    /// to clear it by following up with any amount of trusted input.
+    #[test]
+    fn integrity_is_monotonic() {
+        let mut context = IntegrityState::default();
+        assert_eq!(context.integrity(), Integrity::Trusted);
+
+        context.observe(Integrity::Untrusted);
+        for _ in 0..100 {
+            context.observe(Integrity::Trusted);
+        }
+
+        assert_eq!(context.integrity(), Integrity::Untrusted);
+        assert_eq!(
+            context.check_trusted_action(),
+            Err(IntegrityError::UntrustedContext)
+        );
+    }
+
+    /// Integrity and confidentiality are orthogonal, and the demo's two sources
+    /// sit on opposite diagonals: a private value the user wrote is confidential
+    /// but trusted, while a stranger's public message is untrusted but carries
+    /// no secrecy obligation at all.
+    #[test]
+    fn the_two_axes_are_independent() {
+        let own_secret = (label(0b0001), Integrity::Trusted);
+        let strangers_email = (
+            ConfidentialityLabel::<u8, u8>::public(1),
+            Integrity::Untrusted,
+        );
+
+        // Confidentiality differs...
+        assert!(!own_secret.0.is_public());
+        assert!(strangers_email.0.is_public());
+        // ...and integrity differs in the opposite direction.
+        assert!(own_secret.1.is_trusted());
+        assert!(!strangers_email.1.is_trusted());
+
+        // So reading the public email leaves egress wide open,
+        let mut flow = FlowState::default();
+        flow.observe(&strangers_email.0);
+        assert_eq!(
+            flow.check_egress(&ConfidentialityLabel::<u8, u8>::public(1)),
+            Ok(())
+        );
+        // while still forbidding every consequential action. This is the case
+        // a confidentiality-only system cannot see.
+        let mut context = IntegrityState::default();
+        context.observe(strangers_email.1);
+        assert!(context.check_trusted_action().is_err());
+    }
+
+    proptest! {
+        /// Integrity never recovers, whatever order input arrives in: the
+        /// accumulated value is untrusted exactly when some input was.
+        #[test]
+        fn integrity_accumulates_independent_of_order(inputs: Vec<bool>) {
+            let mut context = IntegrityState::default();
+            for untrusted in &inputs {
+                context.observe(if *untrusted {
+                    Integrity::Untrusted
+                } else {
+                    Integrity::Trusted
+                });
+            }
+
+            let any_untrusted = inputs.iter().any(|untrusted| *untrusted);
+            prop_assert_eq!(context.integrity() == Integrity::Untrusted, any_untrusted);
+            prop_assert_eq!(context.check_trusted_action().is_err(), any_untrusted);
+        }
     }
 }
