@@ -227,10 +227,12 @@ pub(crate) async fn run(
         &launch.startup.args,
         &launch.startup.extra_env,
         launch.startup.has_generated_codex_config,
-        // goose live voice is opt-in and requires autonomous mode.
+        // goose live voice is opt-in, and needs autonomous mode and the unrolled
+        // agent loop (also used for the work it delegates in this process).
         &[
             ("GOOSE_LIVE_VOICE_ENABLED".into(), "true".into()),
             ("GOOSE_MODE".into(), "auto".into()),
+            ("GOOSE_STATE_MACHINE".into(), "true".into()),
         ],
     )
     .await?;
