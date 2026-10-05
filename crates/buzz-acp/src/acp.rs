@@ -784,6 +784,52 @@ impl AcpClient {
             .session_id)
     }
 
+    /// Start goose live voice on an idle session; returns `(interactionId, answerSdp)`.
+    pub(crate) async fn live_voice_start(
+        &mut self,
+        session_id: &str,
+        offer_sdp: &str,
+    ) -> Result<(String, String), AcpError> {
+        let result = self
+            .send_request(
+                "_goose/unstable/session/live-voice/start",
+                serde_json::json!({ "sessionId": session_id, "offerSdp": offer_sdp }),
+            )
+            .await?;
+        match (
+            result["interactionId"].as_str(),
+            result["answerSdp"].as_str(),
+        ) {
+            (Some(interaction), Some(answer)) => Ok((interaction.into(), answer.into())),
+            _ => Err(AcpError::Protocol(
+                "live-voice/start response missing interactionId or answerSdp".into(),
+            )),
+        }
+    }
+
+    pub(crate) async fn live_voice_stop(
+        &mut self,
+        session_id: &str,
+        interaction_id: &str,
+    ) -> Result<(), AcpError> {
+        self.send_request(
+            "_goose/unstable/session/live-voice/stop",
+            serde_json::json!({ "sessionId": session_id, "interactionId": interaction_id }),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Service notifications and auto-approve permission requests until the agent exits.
+    /// Racing this against teardown can drop at most one in-flight reply; callers stop
+    /// the session and shut the agent down immediately afterwards.
+    pub(crate) async fn serve(&mut self) -> AcpError {
+        match self.read_until_response(u64::MAX).await {
+            Err(error) => error,
+            Ok(_) => AcpError::Protocol("unexpected response while serving".into()),
+        }
+    }
+
     /// Replace Goose's native system prompt after `session/new`.
     pub async fn session_set_goose_system_prompt(
         &mut self,

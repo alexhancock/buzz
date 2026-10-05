@@ -3,6 +3,7 @@
 mod git;
 #[cfg(all(test, unix))]
 mod git_runtime_tests;
+mod huddle;
 
 mod acp;
 mod config;
@@ -2696,6 +2697,9 @@ async fn run_harness(
         .filter(|s| !s.is_empty())
         .and_then(|s| buzz_sdk::nip_oa::parse_auth_tag(&s).ok());
 
+    let huddle_auth_tag = relay_auth_tag.clone();
+    // Voice huddles this agent is in; dropping a sender leaves that huddle.
+    let mut huddles: HashMap<Uuid, tokio::sync::oneshot::Sender<()>> = HashMap::new();
     let mut relay =
         HarnessRelay::connect(&config.relay_url, &config.keys, &pubkey_hex, relay_auth_tag)
             .await
@@ -3291,6 +3295,18 @@ async fn run_harness(
                                     // stripped for a legitimately re-added channel.
                                     removed_channels.remove(&ch);
 
+                                    // A huddle invitation is a membership add to its backing channel.
+                                    if huddles.get(&ch).is_none_or(|stop| stop.is_closed()) {
+                                        let (stop, stopped) = tokio::sync::oneshot::channel();
+                                        huddles.insert(ch, stop);
+                                        tokio::spawn(huddle::join_if_huddle(
+                                            relay_rest_client.clone(),
+                                            huddle::Launch::new(config, runtime.startup(None), huddle_auth_tag.clone()),
+                                            ch,
+                                            stopped,
+                                        ));
+                                    }
+
                                     if subscribed_channel_ids.contains(&ch) {
                                         tracing::debug!(channel_id = %ch, "membership notification: channel already subscribed");
                                     } else if let Some(filter) = config::resolve_dynamic_channel_filter(config, ch, &rules) {
@@ -3304,6 +3320,7 @@ async fn run_harness(
                                         tracing::debug!(channel_id = %ch, "membership notification: no matching rules — skipping");
                                     }
                                 } else {
+                                    huddles.remove(&ch);
                                     subscribed_channel_ids.remove(&ch);
                                     tracing::info!(channel_id = %ch, "membership notification: unsubscribing from channel");
                                     if let Err(e) = relay.unsubscribe_channel(ch).await {

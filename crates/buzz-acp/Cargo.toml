@@ -36,6 +36,12 @@ tokio = { workspace = true, features = ["io-std"] }
 # WebSocket
 tokio-tungstenite = { workspace = true }
 
+# Voice huddles: WebRTC media to the agent's live voice model
+webrtc = "0.21"
+rtc = "0.21"
+bytes = "1"
+async-trait = "0.1"
+
 # Codec (bounded line reads)
 tokio-util = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
